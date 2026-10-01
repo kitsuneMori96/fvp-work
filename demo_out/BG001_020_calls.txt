@@ -1,0 +1,23 @@
+# ---- FVP 原作调用序列 (Sakura_dump.txt:function_1064_ / Sakura.lua:f_0001063E) ----
+pushstring BG001_020          # G[63] = 本体
+popglobal 63
+call function_4854_        # f_0005074C : prim 186
+  GraphLoad(186, "graph_bg/BG001_020")   # f_00037294(a3=2 -> graph_bg/)
+  PrimSetSprt(186, 186)               # f_00037345
+  PrimGroupIn(186, 12)                # f_00037476
+  PrimSetTile(186, 19, ...)           # f_000510AE, 1280x720 全屏
+  PrimSetAlpha(186, 255)              # 本体不透明, 直接可见
+pushstring b
+add                        # G[63] = "BG001_020b"
+popglobal 63
+call function_4855_        # f_00050859 : prim 187
+  GraphLoad(187, "graph_bg/BG001_020b")
+  PrimSetSprt(187, 187)
+  PrimGroupIn(187, 12)
+  PrimSetTile(187, 19, ...)
+  PrimSetAlpha(187, 0)                # 模糊层初始隐藏
+# ---- 对话中切到模糊 (对话 function_4809_/f_0004CEFD 不会自动切) ----
+call f_00052882            # PrimSetAlpha(187, 0->255), 或 f_000520EE 渐变
+# 上层包装: f_000525B7(V3DSet) / f_0005261B / f_000526A3(V3DMotion), 条件 G[1973]==true
+call f_00051202            # PrimGroupIn(187, 8/12), 把模糊层翻到前面
+# V3D(V3DMotion/V3DSet)只是相机 X/Y/Z, 不决定用哪张贴图, 反驳"放大自动变模糊".

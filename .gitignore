@@ -1,0 +1,16 @@
+# 个人游戏存档: 绝不上公开仓库
+save_backup_20251001/
+# Python 临时文件
+__pycache__/
+*.pyc
+# Windows 残留
+Thumbs.db
+Desktop.ini
+# 构建产物 (savefix 编译输出, 使用时本地生成)
+savefix/*.dll
+savefix/*.exe
+savefix/*.obj
+savefix/*.pdb
+savefix/*.ilk
+savefix/*.exp
+savefix/*.lib

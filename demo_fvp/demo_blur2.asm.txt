@@ -1,0 +1,443 @@
+0x00000004: init_stack 0 0
+0x00000007: push_i8 1
+0x00000009: pop_global 1973
+0x0000000C: push_i8 12
+0x0000000E: push_i16 768
+0x00000011: syscall PrimGroupIn
+0x00000014: push_i16 768
+0x00000017: push_i8 0
+0x00000019: syscall PrimGroupIn
+0x0000001C: push_i8 18
+0x0000001E: push_i16 850
+0x00000021: syscall PrimGroupIn
+0x00000024: push_i16 850
+0x00000027: push_i8 0
+0x00000029: syscall PrimGroupIn
+0x0000002C: push_i16 767
+0x0000002F: push_i8 0
+0x00000031: syscall PrimGroupIn
+0x00000034: push_i16 551
+0x00000037: push_i16 767
+0x0000003A: syscall PrimGroupIn
+0x0000003D: push_i16 790
+0x00000040: push_i8 4
+0x00000042: syscall PrimGroupIn
+0x00000045: push_i8 4
+0x00000047: push_i16 767
+0x0000004A: syscall PrimGroupIn
+0x0000004D: push_i16 552
+0x00000050: push_i16 790
+0x00000053: syscall PrimGroupIn
+0x00000056: push_i16 420
+0x00000059: push_i8 18
+0x0000005B: syscall PrimGroupIn
+0x0000005E: push_i16 421
+0x00000061: push_i8 18
+0x00000063: syscall PrimGroupIn
+0x00000066: push_i16 422
+0x00000069: push_i8 18
+0x0000006B: syscall PrimGroupIn
+0x0000006E: push_i16 186
+0x00000071: syscall MotionMoveStop
+0x00000074: push_i16 186
+0x00000077: syscall MotionMoveZStop
+0x0000007A: push_i16 186
+0x0000007D: syscall MotionAlphaStop
+0x00000080: push_i16 210
+0x00000083: syscall MotionAnimStop
+0x00000086: push_i16 210
+0x00000089: push_i8 0
+0x0000008B: syscall PrimSetAlpha
+0x0000008E: push_i16 788
+0x00000091: push_i8 0
+0x00000093: syscall PrimSetDraw
+0x00000096: push_i8 0
+0x00000098: pop_global 121
+0x0000009B: push_i16 186
+0x0000009E: push_nil
+0x0000009F: syscall GraphLoad
+0x000000A2: push_i16 186
+0x000000A5: syscall PrimGroupOut
+0x000000A8: push_i16 186
+0x000000AB: syscall PrimSetNull
+0x000000AE: push_i8 19
+0x000000B0: push_nil
+0x000000B1: push_nil
+0x000000B2: push_nil
+0x000000B3: push_nil
+0x000000B4: syscall ColorSet
+0x000000B7: push_i16 186
+0x000000BA: push_string graph_bg/BG001_020
+0x000000CF: syscall GraphLoad
+0x000000D2: push_i16 186
+0x000000D5: push_i16 186
+0x000000D8: push_nil
+0x000000D9: push_nil
+0x000000DA: syscall PrimSetSprt
+0x000000DD: push_i16 186
+0x000000E0: push_i16 800
+0x000000E3: push_i16 500
+0x000000E6: syscall PrimSetOP
+0x000000E9: push_i16 186
+0x000000EC: push_i8 0
+0x000000EE: push_i8 0
+0x000000F0: syscall PrimSetXY
+0x000000F3: push_i16 186
+0x000000F6: push_i16 2000
+0x000000F9: syscall PrimSetZ
+0x000000FC: push_i16 186
+0x000000FF: push_i8 0
+0x00000101: push_i16 2050
+0x00000104: syscall PrimSetRS
+0x00000107: push_i16 186
+0x0000010A: push_i16 255
+0x0000010D: syscall PrimSetAlpha
+0x00000110: push_i16 186
+0x00000113: push_i8 12
+0x00000115: syscall PrimGroupIn
+0x00000118: push_i8 0
+0x0000011A: pop_global 310
+0x0000011D: push_i8 1
+0x0000011F: pop_global 17
+0x00000122: push_i8 0
+0x00000124: pop_global 71
+0x00000127: push_i8 0
+0x00000129: push_i8 0
+0x0000012B: push_i16 -300
+0x0000012E: push_i8 1
+0x00000130: push_i8 1
+0x00000132: push_nil
+0x00000133: syscall V3DMotion
+0x00000136: push_i8 0
+0x00000138: pop_global 1176
+0x0000013B: push_i8 0
+0x0000013D: pop_global 1177
+0x00000140: push_i16 -300
+0x00000143: pop_global 1178
+0x00000146: push_nil
+0x00000147: pop_global 17
+0x0000014A: push_i8 1
+0x0000014C: pop_global 310
+0x0000014F: push_i8 0
+0x00000151: pop_global 71
+0x00000154: push_i16 187
+0x00000157: syscall MotionMoveStop
+0x0000015A: push_i16 187
+0x0000015D: syscall MotionMoveZStop
+0x00000160: push_i16 210
+0x00000163: syscall MotionAnimStop
+0x00000166: push_i16 210
+0x00000169: push_i8 0
+0x0000016B: syscall PrimSetAlpha
+0x0000016E: push_i16 788
+0x00000171: push_i8 0
+0x00000173: syscall PrimSetDraw
+0x00000176: push_i8 0
+0x00000178: pop_global 121
+0x0000017B: push_i16 187
+0x0000017E: push_nil
+0x0000017F: syscall GraphLoad
+0x00000182: push_i16 187
+0x00000185: syscall PrimGroupOut
+0x00000188: push_i16 187
+0x0000018B: syscall PrimSetNull
+0x0000018E: push_i8 19
+0x00000190: push_nil
+0x00000191: push_nil
+0x00000192: push_nil
+0x00000193: push_nil
+0x00000194: syscall ColorSet
+0x00000197: push_i16 187
+0x0000019A: push_string graph_bg/BG001_020b
+0x000001B0: syscall GraphLoad
+0x000001B3: push_i16 187
+0x000001B6: push_i16 187
+0x000001B9: push_nil
+0x000001BA: push_nil
+0x000001BB: syscall PrimSetSprt
+0x000001BE: push_i16 187
+0x000001C1: push_i16 800
+0x000001C4: push_i16 500
+0x000001C7: syscall PrimSetOP
+0x000001CA: push_i16 187
+0x000001CD: push_i8 0
+0x000001CF: push_i8 0
+0x000001D1: syscall PrimSetXY
+0x000001D4: push_i16 187
+0x000001D7: push_i16 2000
+0x000001DA: syscall PrimSetZ
+0x000001DD: push_i16 187
+0x000001E0: push_i8 0
+0x000001E2: push_i16 2050
+0x000001E5: syscall PrimSetRS
+0x000001E8: push_i16 187
+0x000001EB: push_i8 0
+0x000001ED: syscall PrimSetAlpha
+0x000001F0: push_i16 187
+0x000001F3: push_i8 12
+0x000001F5: syscall PrimGroupIn
+0x000001F8: push_i16 420
+0x000001FB: push_string graph/sys_window_front
+0x00000214: syscall GraphLoad
+0x00000217: push_i16 420
+0x0000021A: push_i16 420
+0x0000021D: push_nil
+0x0000021E: push_nil
+0x0000021F: syscall PrimSetSprt
+0x00000222: push_i16 420
+0x00000225: push_nil
+0x00000226: push_i16 300
+0x00000229: syscall PrimSetOP
+0x0000022C: push_i16 420
+0x0000022F: push_i8 0
+0x00000231: push_i8 0
+0x00000233: syscall PrimSetXY
+0x00000236: push_i16 420
+0x00000239: push_i8 0
+0x0000023B: syscall PrimSetAlpha
+0x0000023E: push_i16 420
+0x00000241: push_i8 0
+0x00000243: syscall PrimSetBlend
+0x00000246: push_i16 420
+0x00000249: push_i8 18
+0x0000024B: syscall PrimGroupIn
+0x0000024E: push_i16 421
+0x00000251: push_string graph/sys_window_back
+0x00000269: syscall GraphLoad
+0x0000026C: push_i16 421
+0x0000026F: push_i16 421
+0x00000272: push_nil
+0x00000273: push_nil
+0x00000274: syscall PrimSetSprt
+0x00000277: push_i16 421
+0x0000027A: push_nil
+0x0000027B: push_i16 300
+0x0000027E: syscall PrimSetOP
+0x00000281: push_i16 421
+0x00000284: push_i8 0
+0x00000286: push_i8 0
+0x00000288: syscall PrimSetXY
+0x0000028B: push_i16 421
+0x0000028E: push_i8 0
+0x00000290: syscall PrimSetAlpha
+0x00000293: push_i16 421
+0x00000296: push_i8 0
+0x00000298: syscall PrimSetBlend
+0x0000029B: push_i16 421
+0x0000029E: push_i8 18
+0x000002A0: syscall PrimGroupIn
+0x000002A3: push_i16 552
+0x000002A6: push_i8 8
+0x000002A8: push_i8 86
+0x000002AA: push_i16 589
+0x000002AD: syscall PrimSetText
+0x000002B0: push_i16 552
+0x000002B3: push_nil
+0x000002B4: push_i8 100
+0x000002B6: syscall PrimSetOP
+0x000002B9: push_i8 8
+0x000002BB: push_i16 330
+0x000002BE: push_i8 99
+0x000002C0: syscall TextBuff
+0x000002C3: push_i8 8
+0x000002C5: push_i8 -1
+0x000002C7: push_nil
+0x000002C8: syscall TextFont
+0x000002CB: push_i8 8
+0x000002CD: push_i8 10
+0x000002CF: push_i8 11
+0x000002D1: push_i8 100
+0x000002D3: syscall TextColor
+0x000002D6: push_i8 8
+0x000002D8: push_i8 33
+0x000002DA: push_nil
+0x000002DB: syscall TextSize
+0x000002DE: push_i8 8
+0x000002E0: push_i8 5
+0x000002E2: push_i8 4
+0x000002E4: syscall TextOutSize
+0x000002E7: push_i8 8
+0x000002E9: push_i8 5
+0x000002EB: syscall TextShadowDist
+0x000002EE: push_i8 8
+0x000002F0: push_i8 1
+0x000002F2: syscall TextSpeed
+0x000002F5: push_i8 8
+0x000002F7: push_i8 -5
+0x000002F9: push_i8 0
+0x000002FB: push_i8 0
+0x000002FD: push_i8 0
+0x000002FF: push_i8 0
+0x00000301: push_i8 0
+0x00000303: syscall TextFormat
+0x00000306: push_i16 552
+0x00000309: push_i8 0
+0x0000030B: syscall PrimSetAlpha
+0x0000030E: push_i16 551
+0x00000311: push_i8 0
+0x00000313: push_i16 220
+0x00000316: push_i16 577
+0x00000319: syscall PrimSetText
+0x0000031C: push_i8 0
+0x0000031E: push_i16 851
+0x00000321: push_i16 150
+0x00000324: syscall TextBuff
+0x00000327: push_i8 0
+0x00000329: push_i8 -1
+0x0000032B: push_nil
+0x0000032C: syscall TextFont
+0x0000032F: push_i8 0
+0x00000331: push_i8 10
+0x00000333: push_i8 11
+0x00000335: push_i8 100
+0x00000337: syscall TextColor
+0x0000033A: push_i8 0
+0x0000033C: push_i8 0
+0x0000033E: push_i8 2
+0x00000340: push_i8 2
+0x00000342: syscall TextFunction
+0x00000345: push_i8 0
+0x00000347: push_i8 33
+0x00000349: push_i8 16
+0x0000034B: syscall TextSize
+0x0000034E: push_i8 0
+0x00000350: push_i8 5
+0x00000352: push_i8 4
+0x00000354: syscall TextOutSize
+0x00000357: push_i8 0
+0x00000359: push_i8 5
+0x0000035B: syscall TextShadowDist
+0x0000035E: push_i8 0
+0x00000360: push_i8 -1
+0x00000362: syscall TextSpeed
+0x00000365: push_i8 0
+0x00000367: push_i8 3
+0x00000369: syscall TextSkip
+0x0000036C: push_i8 0
+0x0000036E: push_i8 -5
+0x00000370: push_i8 -5
+0x00000372: push_i8 42
+0x00000374: push_i8 42
+0x00000376: push_i8 -2
+0x00000378: push_i8 -2
+0x0000037A: syscall TextFormat
+0x0000037D: push_i8 0
+0x0000037F: push_string ”。、？！」』☆）―…　
+0x0000039A: syscall TextSuspendChr
+0x0000039D: push_i16 577
+0x000003A0: pop_global 52
+0x000003A3: push_i8 0
+0x000003A5: pop_global 230
+0x000003A8: push_i8 0
+0x000003AA: pop_global 227
+0x000003AD: push_i8 0
+0x000003AF: pop_global 228
+0x000003B2: push_i8 0
+0x000003B4: pop_global 123
+0x000003B7: push_i8 0
+0x000003B9: pop_global 294
+0x000003BC: push_i8 0
+0x000003BE: pop_global 253
+0x000003C1: push_i8 0
+0x000003C3: pop_global 1224
+0x000003C6: push_i16 420
+0x000003C9: push_nil
+0x000003CA: push_i16 255
+0x000003CD: push_i16 300
+0x000003D0: push_nil
+0x000003D1: push_nil
+0x000003D2: syscall MotionAlpha
+0x000003D5: push_i16 420
+0x000003D8: syscall MotionAlphaTest
+0x000003DB: push_return
+0x000003DC: push_i8 1
+0x000003DE: set_e
+0x000003DF: jz 0x000003EC
+0x000003E4: syscall ThreadNext
+0x000003E7: jmp 0x000003D5
+0x000003EC: push_i16 421
+0x000003EF: push_nil
+0x000003F0: push_i16 255
+0x000003F3: push_i16 300
+0x000003F6: push_nil
+0x000003F7: push_nil
+0x000003F8: syscall MotionAlpha
+0x000003FB: push_i16 421
+0x000003FE: syscall MotionAlphaTest
+0x00000401: push_return
+0x00000402: push_i8 1
+0x00000404: set_e
+0x00000405: jz 0x00000412
+0x0000040A: syscall ThreadNext
+0x0000040D: jmp 0x000003FB
+0x00000412: push_i8 8
+0x00000414: syscall TextClear
+0x00000417: push_i8 8
+0x00000419: push_string 　あさひ　
+0x00000426: syscall TextPrint
+0x00000429: push_i16 790
+0x0000042C: push_i8 1
+0x0000042E: syscall PrimSetDraw
+0x00000431: push_i16 552
+0x00000434: push_nil
+0x00000435: push_i16 255
+0x00000438: push_i16 200
+0x0000043B: push_nil
+0x0000043C: push_nil
+0x0000043D: syscall MotionAlpha
+0x00000440: push_i16 552
+0x00000443: syscall MotionAlphaTest
+0x00000446: push_return
+0x00000447: push_i8 1
+0x00000449: set_e
+0x0000044A: jz 0x00000457
+0x0000044F: syscall ThreadNext
+0x00000452: jmp 0x00000440
+0x00000457: push_i8 0
+0x00000459: push_string さて、今夜はシチューだ。たくさん作ったから、いっぱい食べてくれたらうれしいな
+0x000004A8: syscall TextPrint
+0x000004AB: push_i8 0
+0x000004AD: push_string 台所からエプロンを外しながらあさひさんがやって来た。
+0x000004E4: syscall TextPrint
+0x000004E7: push_i16 187
+0x000004EA: push_nil
+0x000004EB: push_i16 255
+0x000004EE: push_i16 500
+0x000004F1: push_nil
+0x000004F2: push_nil
+0x000004F3: syscall MotionAlpha
+0x000004F6: push_i16 187
+0x000004F9: syscall MotionAlphaTest
+0x000004FC: push_return
+0x000004FD: push_i8 1
+0x000004FF: set_e
+0x00000500: jz 0x0000050D
+0x00000505: syscall ThreadNext
+0x00000508: jmp 0x000004F6
+0x0000050D: push_i8 8
+0x0000050F: syscall TextClear
+0x00000512: push_i8 8
+0x00000514: push_string 　あさひ　
+0x00000521: syscall TextPrint
+0x00000524: push_i8 0
+0x00000526: push_string さて、今夜はシチューだ。たくさん作ったから、いっぱい食べてくれたらうれしいな
+0x00000575: syscall TextPrint
+0x00000578: push_i8 0
+0x0000057A: push_string 台所からエプロンを外しながらあさひさんがやって来た。
+0x000005B1: syscall TextPrint
+0x000005B4: push_i16 187
+0x000005B7: push_i16 255
+0x000005BA: push_i8 0
+0x000005BC: push_i16 500
+0x000005BF: push_nil
+0x000005C0: push_nil
+0x000005C1: syscall MotionAlpha
+0x000005C4: push_i16 187
+0x000005C7: syscall MotionAlphaTest
+0x000005CA: push_return
+0x000005CB: push_i8 1
+0x000005CD: set_e
+0x000005CE: jz 0x000005DB
+0x000005D3: syscall ThreadNext
+0x000005D6: jmp 0x000005C4
+0x000005DB: ret
