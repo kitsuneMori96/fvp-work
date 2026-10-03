@@ -1,0 +1,13 @@
+[package]
+name = "fvp-conform"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fvp-conform"
+path = "src/main.rs"
+
+[dependencies]
+rfvp = { path = "../../../../rfvp-upstream/crates/rfvp", default-features = false, features = ["soft-render-core"] }
+fvp-preview-core = { path = "../../core" }
+image = "0.24"

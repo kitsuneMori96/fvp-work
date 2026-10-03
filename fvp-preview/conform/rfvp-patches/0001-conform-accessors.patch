@@ -1,0 +1,44 @@
+diff --git a/crates/rfvp/src/subsystem/resources/motion_manager/mod.rs b/crates/rfvp/src/subsystem/resources/motion_manager/mod.rs
+index 6a75cb8..2a025f6 100644
+--- a/crates/rfvp/src/subsystem/resources/motion_manager/mod.rs
++++ b/crates/rfvp/src/subsystem/resources/motion_manager/mod.rs
+@@ -101,6 +101,17 @@ impl MotionManager {
+         &self.textures
+     }
+ 
++    // FVP-PREVIEW-CONFORM (scratch-only): let the conformance harness seed
++    // textures and prims without going through VFS/syscalls. Not for upstream.
++    pub fn graphs_mut(&mut self) -> &mut Vec<GraphBuff> {
++        &mut self.textures
++    }
++
++    // FVP-PREVIEW-CONFORM (scratch-only): see above.
++    pub fn prim_manager_mut(&mut self) -> &mut PrimManager {
++        &mut self.prim_manager
++    }
++
+     pub fn take_pending_gpu_graph_unloads(&mut self) -> Vec<u16> {
+         std::mem::take(&mut self.pending_gpu_graph_unloads)
+     }
+diff --git a/crates/rfvp/src/subsystem/world.rs b/crates/rfvp/src/subsystem/world.rs
+index db4c32c..d13bd4e 100644
+--- a/crates/rfvp/src/subsystem/world.rs
++++ b/crates/rfvp/src/subsystem/world.rs
+@@ -399,6 +399,17 @@ impl GameData {
+         &self.scene_controller
+     }
+ 
++    // FVP-PREVIEW-CONFORM (scratch-only): expose motion state to the external
++    // conformance harness (and future preview daemon). Not for upstream.
++    pub fn motion_manager_ref(&self) -> &MotionManager {
++        &self.motion_manager
++    }
++
++    // FVP-PREVIEW-CONFORM (scratch-only): see above.
++    pub fn motion_manager_mut(&mut self) -> &mut MotionManager {
++        &mut self.motion_manager
++    }
++
+     pub fn vfs_load_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+         self.vfs.read_file(path)
+     }
