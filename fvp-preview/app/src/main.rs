@@ -143,6 +143,8 @@ struct PreviewApp {
     scene: Option<Snapshot>,
     textures: HashMap<String, TexEntry>,
     status: String,
+    /// 当前窗口匹配的 viewport（变化时发 resize，保证画布与游戏同分辨率 1:1）。
+    win_vp: Option<(f32, f32)>,
 }
 
 impl PreviewApp {
@@ -152,6 +154,7 @@ impl PreviewApp {
             scene: None,
             textures: HashMap::new(),
             status: "等待快照（stdin JSON）…".to_string(),
+            win_vp: None,
         }
     }
 
@@ -165,6 +168,20 @@ impl PreviewApp {
             let n = self.scene.as_ref().map(|s| s.prims.len()).unwrap_or(0);
             self.status = format!("已加载快照：{} prim", n);
             ctx.request_repaint();
+        }
+        // 窗口分辨率跟随游戏 viewport（HCB 可视化编辑器铁律：1:1 同分辨率）。
+        if let Some(scene) = &self.scene {
+            let vp = (scene.viewport.w, scene.viewport.h);
+            if self.win_vp != Some(vp) && vp.0 > 0.0 && vp.1 > 0.0 {
+                self.win_vp = Some(vp);
+                // +34 为顶部状态栏高度；超出屏幕时用户可缩放窗口，画布走滚动。
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::Vec2::new(
+                    vp.0,
+                    vp.1 + 34.0,
+                )));
+                let n = self.scene.as_ref().map(|s| s.prims.len()).unwrap_or(0);
+                self.status = format!("已加载快照：{} prim（{}x{}）", n, vp.0 as u32, vp.1 as u32);
+            }
         }
     }
 
@@ -278,34 +295,45 @@ impl eframe::App for PreviewApp {
                 w: scene.viewport.w,
                 h: scene.viewport.h,
             };
-            let painter = ui.painter();
-            let origin = ui.min_rect().min;
-            for (i, px, py) in Self::draw_order(&scene) {
-                let prim = &scene.prims[i];
-                let Some((tex_id, w, h)) = self.texture_for(ctx, &prim.image) else {
-                    continue;
-                };
-                let corners = model::quad_corners(&prim.params(), w, h, px, py, &cam, &vp);
-                let tint = egui::Color32::from_rgba_unmultiplied(255, 255, 255, prim.alpha);
-                let to_egui = |c: CorePos2| egui::Pos2::new(origin.x + c.x, origin.y + c.y);
-                let mut mesh = egui::Mesh::default();
-                mesh.texture_id = tex_id;
-                for (k, c) in corners.iter().enumerate() {
-                    let (u, v) = match k {
-                        0 => (0.0, 0.0),
-                        1 => (1.0, 0.0),
-                        2 => (1.0, 1.0),
-                        _ => (0.0, 1.0),
-                    };
-                    mesh.vertices.push(egui::epaint::Vertex {
-                        pos: to_egui(*c),
-                        uv: egui::Pos2::new(u, v),
-                        color: tint,
-                    });
-                }
-                mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                painter.add(egui::Shape::mesh(mesh));
-            }
+            // 游戏分辨率画布（1:1），窗口装不下时滚动而非缩放——编辑器所见即游戏所得。
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let (canvas_rect, _) = ui.allocate_exact_size(
+                        egui::Vec2::new(vp.w, vp.h),
+                        egui::Sense::hover(),
+                    );
+                    let origin = canvas_rect.min;
+                    let painter = ui.painter_at(canvas_rect);
+                    for (i, px, py) in Self::draw_order(&scene) {
+                        let prim = &scene.prims[i];
+                        let Some((tex_id, w, h)) = self.texture_for(ctx, &prim.image) else {
+                            continue;
+                        };
+                        let corners = model::quad_corners(&prim.params(), w, h, px, py, &cam, &vp);
+                        let tint =
+                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, prim.alpha);
+                        let to_egui =
+                            |c: CorePos2| egui::Pos2::new(origin.x + c.x, origin.y + c.y);
+                        let mut mesh = egui::Mesh::default();
+                        mesh.texture_id = tex_id;
+                        for (k, c) in corners.iter().enumerate() {
+                            let (u, v) = match k {
+                                0 => (0.0, 0.0),
+                                1 => (1.0, 0.0),
+                                2 => (1.0, 1.0),
+                                _ => (0.0, 1.0),
+                            };
+                            mesh.vertices.push(egui::epaint::Vertex {
+                                pos: to_egui(*c),
+                                uv: egui::Pos2::new(u, v),
+                                color: tint,
+                            });
+                        }
+                        mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
+                });
         });
         // 有新快照才重画就够了，但 stdin 线程随时可能来数据，保持低频轮询。
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
