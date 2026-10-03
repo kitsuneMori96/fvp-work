@@ -126,6 +126,29 @@ impl Affine2 {
             self.m21 * p.x + self.m22 * p.y + self.ty,
         )
     }
+
+    /// 逆矩阵（行列式为 0 时返回 None；预览窗把屏幕点映回本地坐标用）。
+    pub fn inverse(&self) -> Option<Self> {
+        let det = self.m11 * self.m22 - self.m12 * self.m21;
+        if det.abs() < 1e-12 {
+            return None;
+        }
+        let inv = 1.0 / det;
+        let m11 = self.m22 * inv;
+        let m12 = -self.m12 * inv;
+        let m21 = -self.m21 * inv;
+        let m22 = self.m11 * inv;
+        let tx = -(m11 * self.tx + m12 * self.ty);
+        let ty = -(m21 * self.tx + m22 * self.ty);
+        Some(Self {
+            m11,
+            m12,
+            m21,
+            m22,
+            tx,
+            ty,
+        })
+    }
 }
 
 impl Mul for Affine2 {
@@ -168,6 +191,18 @@ mod tests {
             (s * t).transform_pos(p),
             Pos2::new(22.0, 63.0)
         ));
+    }
+
+    #[test]
+    fn inverse_roundtrips() {
+        let m = Affine2::translate(Vec2::new(100.0, -50.0))
+            * Affine2::rotate(0.7)
+            * Affine2::scale(Vec2::new(2.0, 0.5));
+        let inv = m.inverse().expect("可逆");
+        let p = Pos2::new(13.0, 77.0);
+        assert!(approx(inv.transform_pos(m.transform_pos(p)), p));
+        // 退化矩阵不可逆
+        assert!(Affine2::scale(Vec2::new(0.0, 1.0)).inverse().is_none());
     }
 
     #[test]
