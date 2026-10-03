@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "fvp-preview-vm"
+version = "0.1.0"
+edition = "2021"
+description = "B-track product: run real HCB in rfvp VM, dump prim snapshot as preview JSON"
+license = "MPL-2.0"
+
+[[bin]]
+name = "fvp-preview-vm"
+path = "src/main.rs"
+
+[dependencies]
+# 与 conform/harness 同一约束：需要 setup-rfvp.sh 备好的兄弟检出（含 conform patch）。
+rfvp = { path = "../../../rfvp-upstream/crates/rfvp", default-features = false, features = ["soft-render-core"] }
+# 与 rfvp 锁死的 image 大版本保持完全一致，否则 DynamicImage 跨 crate 类型不匹配。
+image = "=0.24.9"
+serde_json = "1"
