@@ -21,3 +21,6 @@ rfvp = { path = "../../../rfvp-upstream/crates/rfvp", default-features = false, 
 # 与 rfvp 锁死的 image 大版本保持完全一致，否则 DynamicImage 跨 crate 类型不匹配。
 image = "=0.24.9"
 serde_json = "1"
+# syscall trace 经 log::info 走 stderr（RFVP_TRACE_SYSCALL=1 时上游打出）。
+log = "0.4"
+env_logger = "0.11"
