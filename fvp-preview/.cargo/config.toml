@@ -1,0 +1,5 @@
+# WSL 侧构建：产物进 ext4（D 盘 9P 太慢）。
+# Windows 侧构建时用环境变量覆盖即可（env 优先级高于本文件）：
+#   $env:CARGO_TARGET_DIR = ".\target"
+[build]
+target-dir = "/home/kitsunemori/.cache/cargo-target/fvp-preview"

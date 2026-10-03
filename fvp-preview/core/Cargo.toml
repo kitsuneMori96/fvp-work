@@ -1,0 +1,10 @@
+[package]
+name = "fvp-preview-core"
+version = "0.1.0"
+edition = "2021"
+description = "FVP prim -> screen transform, ported from rfvp soft_render (position/rotation parity only)"
+license = "MPL-2.0"
+
+[dependencies]
+# intentionally dependency-free: pure std so the math can be
+# embedded anywhere (Rust app, PyO3 lib, WASM) without drift.

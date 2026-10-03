@@ -6,6 +6,10 @@ __pycache__/
 # Windows 残留
 Thumbs.db
 Desktop.ini
+# Rust 构建产物 (fvp-preview 用 .cargo/config.toml 把 target 指到 WSL 侧，
+# 即使如此也不进仓；Cargo.lock 保留以锁定可复现构建)
+fvp-preview/target/
+**/*.rs.bk
 # 构建产物 (savefix 编译输出, 使用时本地生成)
 savefix/*.dll
 savefix/*.exe
