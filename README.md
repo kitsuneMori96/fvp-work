@@ -30,6 +30,17 @@
 - `patch_savepath.py` — 存档路径相关小工具.
 - `save_backup_20251001/` — **本地个人存档备份, 被 gitignore 排除,
   永不上公开仓库.**
+- `fvp-preview/` — HCB 可视化编辑器 (坐标语义预览, 不复刻引擎):
+  - `core/` — 坐标变换库 (`build_draw_model` 等价实现, 零依赖, 15 单测).
+  - `app/` — egui 预览+编辑 (`cat scene.json | fvp-preview --addrmap
+    traced_addrmap.json --hcb 原.hcb --out-hcb 新.hcb`; 点选/拖拽/数字面板/写回).
+  - `vm/` — 真 HCB 运行器 (快照导出 `--ref-png` 标尺, `--trace-syscall` 溯源).
+  - `extract_scene.py` — 反汇编工程 -> 静态场景 JSON+地址映射 (常量脚本用).
+  - `trace_join.py` — syscall trace + 反汇编 join -> 动态 last-write 映射
+    (动态脚本用; 0 个/多个候选一律拒绝写回).
+  - `patch_hcb.py` — 二进制等宽补丁 (操作码+旧值双校验, 违例 abort).
+  - 闭环：`disassembler -> vm --trace-syscall -> trace_join.py -> 编辑 ->
+    patch_hcb.py -> vm 重跑断言 (快照 diff 应只有目标字段)`.
 
 ## 真机测试铁律
 
