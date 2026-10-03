@@ -11,6 +11,10 @@ license = "MPL-2.0"
 name = "fvp-preview-vm"
 path = "src/main.rs"
 
+[[bin]]
+name = "fvp-pack-ls"
+path = "src/pack_ls.rs"
+
 [dependencies]
 # 与 conform/harness 同一约束：需要 setup-rfvp.sh 备好的兄弟检出（含 conform patch）。
 rfvp = { path = "../../../rfvp-upstream/crates/rfvp", default-features = false, features = ["soft-render-core"] }

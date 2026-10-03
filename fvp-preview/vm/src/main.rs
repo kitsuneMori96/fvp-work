@@ -34,7 +34,8 @@ fn main() {
     let mut ticks: usize = 200;
     let mut break_pc: Option<usize> = None;
     let mut png_dir = "/tmp/vmtex".to_string();
-    let mut viewport = (800.0f32, 600.0f32);
+    // 游戏原生分辨率（樱萌放 1280x720，VNDB+官网 spec 实锤；z 分支投影中心依赖它）。
+    let mut viewport = (1280.0f32, 720.0f32);
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {

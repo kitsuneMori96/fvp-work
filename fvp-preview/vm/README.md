@@ -25,7 +25,10 @@ FVP_BASE_PATH=/path/to/game fvp-preview-vm scene.hcb --ticks 300 \
 - 只导出 `typ==Sprt(4)` 且 `draw` 且贴图可解的 prim；贴图按 `g<texture_id>.png`
   导出到 `--png-dir`（NVSG 解码后的真像素，不是近似图）。
 - 字段与 `fvp-preview` 的快照协议对齐（含 parent 链、attr、OP、alpha、V3D 相机）。
-- viewport 默认 800x600（z 分支投影中心依赖它；非常规分辨率用 `--viewport W H`）。
+- viewport 默认 1280x720（樱萌放原生分辨率，VNDB＋官网 spec 实锤；
+  z 分支投影中心依赖它；非常规分辨率用 `--viewport W H`）。
+- 附带 `fvp-pack-ls`（同 crate 第二 binary）：列 `.bin` 包内资源名，
+  编辑器资源浏览器前置。另附 `scenes/gen_tachie_scene.py`（BG＋双立绘验证场景）。
 
 ## 已知限制（v1）
 
