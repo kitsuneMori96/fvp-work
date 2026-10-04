@@ -37,6 +37,9 @@
   <h3>脚本序列 <span id="rCount"></span></h3>
   <div class="row"><button id="rPrev">◀</button><input type="range" id="rSlider" min="0" max="0" value="0" style="flex:1"><button id="rNext">▶</button></div>
   <div class="row"><small id="rLabel">无回放</small></div>
+  <div class="row"><small>过滤 <input type="text" id="rFilter" size="18" placeholder="如 258 / PrimSetXY"></small></div>
+  <div id="scriptList" tabindex="0" style="max-height:260px;overflow-y:auto;border:1px solid #333;font-family:monospace;font-size:12px;"></div>
+  <div class="row"><small>点行/↑↓光标即预览到该处； slider 同步</small></div>
   <div class="row"><button id="btnExport">导出PNG系列</button><small id="expStatus"></small></div>
   <h3>图层（顶→底）</h3>
   <div id="layers"></div>
@@ -188,6 +191,32 @@ function gotoRow(i){
   adopt({viewport:replay.viewport,camera:replay.camera||{x:0,y:0,z:0},prims:r.prims},`脚本行 ${ridx+1}/${replay.rows.length}`);
   document.getElementById('rSlider').value=ridx;
   document.getElementById('rLabel').textContent=`#${r.seq} ${r.label}`;
+  markScriptCursor(true);
+}
+// ---------------- 脚本 surviving（行=回放行，光标移到哪预览到哪） ----------------
+function scriptFilter(){ return document.getElementById('rFilter').value.trim(); }
+function renderScriptList(){
+  const el=document.getElementById('scriptList'); el.innerHTML='';
+  if(!replay||!replay.rows.length){ el.textContent='无回放'; return; }
+  const f=scriptFilter();
+  const frag=document.createDocumentFragment();
+  replay.rows.forEach((r,i)=>{
+    if(f && !(('#'+r.seq+' '+r.label).includes(f))) return;
+    const d=document.createElement('div');
+    d.textContent=`${String(i+1).padStart(4,' ')}  #${r.seq} ${r.label}`;
+    d.style.cssText='white-space:pre;padding:1px 4px;cursor:pointer;'+(i===ridx?'background:#2a3a55;color:#fff;':'');
+    d.dataset.i=i;
+    d.onclick=()=>gotoRow(i);
+    frag.append(d);
+  });
+  el.append(frag);
+  markScriptCursor(false);
+}
+function markScriptCursor(scroll){
+  const el=document.getElementById('scriptList');
+  [...el.children].forEach(c=>{ const on=parseInt(c.dataset.i,10)===ridx;
+    c.style.background=on?'#2a3a55':''; c.style.color=on?'#fff':'';
+    if(on&&scroll) c.scrollIntoView({block:'nearest'}); });
 }
 // ---------------- 图层 ----------------
 function renderLayers(){
@@ -263,7 +292,17 @@ document.getElementById('fScene').onchange=async e=>{ const s=await readJSON(e.t
 document.getElementById('fReplay').onchange=async e=>{ const r=await readJSON(e.target.files[0]);
   if(r&&r.rows){ replay=r; ridx=0;
     document.getElementById('rSlider').max=r.rows.length-1;
-    document.getElementById('rCount').textContent=`${r.rows.length}行`; gotoRow(0); } };
+    document.getElementById('rCount').textContent=`${r.rows.length}行`; renderScriptList(); gotoRow(0); } };
+document.getElementById('rFilter').oninput=()=>renderScriptList();
+document.getElementById('scriptList').addEventListener('keydown',e=>{
+  if(!replay||!replay.rows.length) return;
+  if(e.key==='ArrowDown'){ gotoRow(ridx+1); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ gotoRow(ridx-1); e.preventDefault(); }
+  else if(e.key==='PageDown'){ gotoRow(ridx+10); e.preventDefault(); }
+  else if(e.key==='PageUp'){ gotoRow(ridx-10); e.preventDefault(); }
+  else if(e.key==='Home'){ gotoRow(0); e.preventDefault(); }
+  else if(e.key==='End'){ gotoRow(replay.rows.length-1); e.preventDefault(); }
+});
 document.getElementById('fMap').onchange=async e=>{ const m=await readJSON(e.target.files[0]);
   if(m&&m.addrmap)addrmap=m.addrmap; renderEditor(); };
 document.getElementById('rPrev').onclick=()=>gotoRow(ridx-1);
@@ -277,7 +316,7 @@ document.getElementById('btnSample').onclick=async ()=>{
   try{ const [s,r,m]=await Promise.all([api('/api/scene'),api('/api/replay'),api('/api/addrmap').catch(()=>null)]);
     if(s&&s.prims)adopt(s,'示例工程');
     if(r&&r.rows){replay=r;ridx=0;document.getElementById('rSlider').max=r.rows.length-1;
-      document.getElementById('rCount').textContent=`${r.rows.length}行`;gotoRow(0);}
+      document.getElementById('rCount').textContent=`${r.rows.length}行`;renderScriptList();gotoRow(0);}
     if(m&&m.addrmap)addrmap=m.addrmap;
     const h=await api('/api/paths').catch(()=>null);
     if(h&&h.hcb)document.getElementById('hcbPath').value=h.hcb;
