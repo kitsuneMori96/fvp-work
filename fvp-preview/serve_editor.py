@@ -115,8 +115,10 @@ def main():
     ap.add_argument("--addrmap", default="")
     ap.add_argument("--out-hcb", default="")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--host", default="0.0.0.0",
+                    help="监听地址（WSL2 下 Windows 浏览器需 0.0.0.0，用 WSL IP 访问）")
     ARGS = ap.parse_args()
-    srv = ThreadingHTTPServer(("127.0.0.1", ARGS.port), H)
+    srv = ThreadingHTTPServer((ARGS.host, ARGS.port), H)
     print(f"编辑器服务 http://localhost:{ARGS.port}/（Ctrl+C 停）", flush=True)
     print(f"sample={ARGS.sample_dir} hcb={ARGS.hcb or '(页面填)'}", flush=True)
     srv.serve_forever()
