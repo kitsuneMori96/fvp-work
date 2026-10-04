@@ -8,6 +8,9 @@ set -e
 HCB="${1:?用法: sample_sakura.sh <game.hcb> [SAMPLE_DIR] [TICKS]}"
 SAMPLE_DIR="${2:-/tmp/fvp-sample-sakura}"
 TICKS="${3:-2000}"
+# 开场实录：ENTRY_PC=剧本函数（如 665985 游戏开场），AUTO_CLICK=自动过 click-to-continue。
+ENTRY_PC="${ENTRY_PC:-}"
+AUTO_CLICK="${AUTO_CLICK:-}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 DISASM="${DISASM:-$HOME/rfvp-upstream/target/debug/disassembler}"
 VM="$HOME/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"
@@ -22,7 +25,10 @@ else
 fi
 echo "== 2/5 vm 运行开场 $TICKS ticks =="
 rm -rf "$SAMPLE_DIR/tex_raw"
-"$VM" "$HCB" --ticks "$TICKS" --png-dir "$SAMPLE_DIR/tex_raw" \
+EXTRA=()
+[ -n "$ENTRY_PC" ] && EXTRA+=(--entry-pc "$ENTRY_PC")
+[ -n "$AUTO_CLICK" ] && EXTRA+=(--auto-click "$AUTO_CLICK")
+"$VM" "$HCB" --ticks "$TICKS" "${EXTRA[@]}" --png-dir "$SAMPLE_DIR/tex_raw" \
   --trace-syscall > "$SAMPLE_DIR/scene.json" 2> "$SAMPLE_DIR/trace.log"
 echo "== 3/5 贴图归档（绝对路径改写，/tmp 易失）=="
 mkdir -p "$SAMPLE_DIR/tex"

@@ -15,7 +15,7 @@ if pgrep -f "serve_editor.py.*$PORT" >/dev/null 2>&1; then
   echo "服务已在跑（端口 $PORT），不重复启动。"
 else
   setsid nohup python3 "$REPO/serve_editor.py" --sample-dir "$SAMPLE_DIR" \
-    --port "$PORT" > /tmp/editor-$PORT.log 2>&1 < /dev/null &
+    --port "$PORT" ${FVP_HCB:+--hcb "$FVP_HCB" --addrmap "$FVP_ADDRMAP" --out-hcb "$FVP_OUT"} > /tmp/editor-$PORT.log 2>&1 < /dev/null &
   sleep 2
 fi
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')

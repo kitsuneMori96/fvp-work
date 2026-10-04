@@ -34,6 +34,9 @@ fn main() {
     }
     let hcb_path = args[1].clone();
     let mut ticks: usize = 200;
+    let mut entry_override: Option<usize> = None;
+    let mut preset_globals: Vec<(usize, String)> = Vec::new();
+    let mut auto_click: Option<usize> = None;
     let mut break_pc: Option<usize> = None;
     let mut png_dir = "/tmp/vmtex".to_string();
     let mut ref_png: Option<String> = None;
@@ -46,6 +49,28 @@ fn main() {
         match args[i].as_str() {
             "--ticks" => {
                 ticks = args[i + 1].parse().expect("--ticks 需要整数");
+                i += 2;
+            }
+            "--entry-pc" => {
+                // 冷启动指定函数（如标题菜单分支后的开局剧本），跳过标题输入等待。
+                let s = args[i + 1].clone();
+                entry_override = Some(
+                    s.strip_prefix("0x")
+                        .map(|h| usize::from_str_radix(h, 16).expect("hex"))
+                        .unwrap_or_else(|| s.parse().expect("十进制地址")),
+                );
+                i += 2;
+            }
+            "--set-global" => {
+                // 预置全局变量（冷启动时补 boot 本来会设的标志，如 --set-global 1 true）。
+                let idx: usize = args[i + 1].parse().expect("global序号");
+                let val = args[i + 2].clone();
+                preset_globals.push((idx, val));
+                i += 3;
+            }
+            "--auto-click" => {
+                // 每 EVERY tick 自动点一下（down 一帧、up 一帧），走过 click-to-continue。
+                auto_click = Some(args[i + 1].parse().expect("--auto-click 需要整数"));
                 i += 2;
             }
             "--break-pc" => {
@@ -114,10 +139,27 @@ fn main() {
 
     let bytes = std::fs::read(&hcb_path).expect("读 HCB");
     let mut parser = Parser::from_bytes(bytes, Nls::ShiftJIS).expect("解析 HCB");
-    let entry = parser.get_entry_point();
-    eprintln!("[vm] entry={} ticks={} break_pc={:?}", entry, ticks, break_pc);
+    let entry: u32 = entry_override
+        .map(|v| v as u32)
+        .unwrap_or_else(|| parser.get_entry_point());
+    eprintln!(
+        "[vm] entry={} ticks={} break_pc={:?}",
+        entry, ticks, break_pc
+    );
 
     let mut game = GameData::default();
+    for (idx, val) in &preset_globals {
+        let v = match val.as_str() {
+            "true" => rfvp::script::Variant::True,
+            "nil" => rfvp::script::Variant::Nil,
+            n => rfvp::script::Variant::Int(n.parse().expect("--set-global 值")),
+        };
+        rfvp::script::global::GLOBAL
+            .lock()
+            .unwrap()
+            .set(*idx as u16, v);
+        eprintln!("[vm] 预置 global[{}]={}", idx, val);
+    }
     // headless 窗口预设游戏分辨率（真 HCB 的 Dissolve 等 syscall 会读窗口宽高；
     // 依赖 rfvp scratch patch 0001-window-headless，见本 crate rfvp-patches/）。
     game.window_mut()
@@ -125,20 +167,104 @@ fn main() {
     let mut tm = ThreadManager::new();
     tm.start_main(entry);
     let mut vm = VmRunner::new(tm);
+    // 自动点击：光标先放屏幕中央，每 EVERY tick 打一对 down/up。
+    if auto_click.is_some() {
+        game.inputs_manager_mut().notify_mouse_move(640, 360);
+    }
 
     let mut stop_why = format!("ticks耗尽({})", ticks);
-    for _ in 0..ticks {
+    // 贴图时间线状态：tid -> (path,r,g,b,generation)；tid -> 已存份数；tid -> 最新文件。
+    let mut tex_state: HashMap<i16, (String, u8, u8, u8, u64)> = HashMap::new();
+    let mut tex_seq: HashMap<i16, u32> = HashMap::new();
+    let mut tex_file: HashMap<i16, String> = HashMap::new();
+    for tick_idx in 0..ticks {
+        if let Some(every) = auto_click {
+            use rfvp::subsystem::resources::input_manager::KeyCode;
+            let phase = tick_idx % every;
+            if phase == 0 {
+                game.inputs_manager_mut()
+                    .notify_mouse_down(KeyCode::MouseLeft);
+            } else if phase == 1 {
+                game.inputs_manager_mut().notify_mouse_up(KeyCode::MouseLeft);
+            }
+        }
+        // 主机每帧都会 begin_frame（app.rs/soft_host.rs）提交 pending 输入；
+        // headless 不调，InputGetState 永远看不到点击。顺序对标主机：先提交再跑脚本。
+        game.inputs_manager_mut().begin_frame();
+        // 主机每帧 tick timers（app.rs:630），不带 TimerGet 等待永不到期。
+        game.timer_manager_mut().tick(16);
         // 转场时钟：真机帧循环（anzu_scene::update_dissolve）每帧推进，
         // VmRunner::tick 只步进脚本。headless 下不手动带，转场永远冻在第一帧
         //（Dissolve/DissolveWait 脚本也会卡住）。16ms 与 tick 的帧预算对齐。
         // 依赖 rfvp scratch patch（motion_manager_mut，见 rfvp-patches/）。
-        game.motion_manager_mut().tick_dissolve(16);
-        game.motion_manager_mut().tick_dissolve2(16);
+        // 同理：alpha/move/scale/rotation/z/v3d/anim/snow 全是帧时钟驱动，
+        // 不带 MotionAlphaTest 之类的“等动画完”忙轮询永远撞墙（开场黑场淡入即如此）。
+        // 对标 anzu_scene::update_after_vm（flag=should_exit=false；parts 要 VFS 取不到先跳过）。
+        {
+            let mm = game.motion_manager_mut();
+            mm.tick_dissolve(16);
+            mm.tick_dissolve2(16);
+            mm.update_alpha_motions(16, false);
+            mm.update_move_motions(16, false);
+            mm.update_s2_move_motions(16, false);
+            mm.update_rotation_motions(16, false);
+            mm.update_z_motions(16, false);
+            mm.update_v3d_motions(16, false);
+            mm.update_anim_motions(16);
+            mm.update_snow_motions(16, viewport.0 as i32, viewport.1 as i32);
+        }
         if let Err(e) = vm.tick(&mut game, &mut parser, 16) {
             eprintln!("[vm] tick 错误（脚本可能已结束或遇到未打桩syscall）: {}", e);
             stop_why = format!("tick错误: {}", e);
             break;
         }
+        // 贴图时间线：逐 tick 扫描 graph 槽，内容 epoch 变化即落盘 g<tid>_<k>.png。
+        // 槽复用（开场 186 槽先后装 5 张 BG）下终帧导出会张冠李戴，必须按时间切分；
+        // replay 按 tick 对齐消费（见 replay_ops.py），phantom save 无人消费即无害。
+        // 状态=(ready,有像素,path,r,g,b,generation)：load 必 dirty、同名重载也存（像素相同文件多占一份，
+        // 但与 replay 的“每次有名 GraphLoad 即新 epoch”严格对齐）；unload 清状态。
+        {
+            let mm = game.motion_manager_ref();
+            for (tid, g) in mm.graphs().iter().enumerate() {
+                let present =
+                    g.get_texture_ready() && g.get_texture().is_some();
+                if !present {
+                    tex_state.remove(&(tid as i16));
+                    continue;
+                }
+                let st = (
+                    g.get_texture_path().to_string(),
+                    g.get_r_value(),
+                    g.get_g_value(),
+                    g.get_b_value(),
+                    g.get_generation(),
+                );
+                if tex_state.get(&(tid as i16)) == Some(&st) {
+                    continue;
+                }
+                tex_state.insert(tid as i16, st);
+                let k = tex_seq.get(&(tid as i16)).copied().unwrap_or(0);
+                tex_seq.insert(tid as i16, k + 1);
+                let path = format!("{}/g{}_{}.png", png_dir, tid, k);
+                if let Some(img) = g.get_texture().as_ref() {
+                    match img.save(&path) {
+                        Ok(()) => {
+                            tex_file.insert(tid as i16, path.clone());
+                            eprintln!(
+                                "[vm] texsave tick={} tid={} seq={} -> {} ({}x{})",
+                                tick_idx, tid, k, path,
+                                g.get_width(), g.get_height()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("[vm] 贴图落盘失败 g{}_{}: {}", tid, k, e)
+                        }
+                    }
+                }
+            }
+        }
+        // tick 边界标记（与 trace syscall 行同走 stderr，保序）：replay 由此建 op->tick 映射。
+        eprintln!("[vm] tickend {}", tick_idx);
         let t = vm.thread_manager();
         if let Some(pc) = break_pc {
             // 注意：一个 tick 跑多条指令，只能按“首次越过”判停，不能按精确相等
@@ -148,10 +274,18 @@ fn main() {
                 break;
             }
         }
-        // 无 RUNNING context（等待输入/全部结束）：状态已稳定。
+        // 无活跃 context（等待输入/全部结束）：状态已稳定。
+        // WAIT/SLEEP/DISSOLVE_WAIT 也算活跃——停了它们永远不会醒；
+        // TEXT=等用户点文本，INPUT类忙轮询保持RUNNING，都属稳定/耗尽退出。
+        // 注意 WAIT（如 ThreadWait 毫秒等待）也算活跃——停了它永远不会醒。
         let any_running = t.contexts.iter().any(|c| {
-            c.get_status()
-                .contains(rfvp::script::context::ThreadState::CONTEXT_STATUS_RUNNING)
+            let s = c.get_status();
+            s.contains(rfvp::script::context::ThreadState::CONTEXT_STATUS_RUNNING)
+                || s.contains(rfvp::script::context::ThreadState::CONTEXT_STATUS_WAIT)
+                || s.contains(rfvp::script::context::ThreadState::CONTEXT_STATUS_SLEEP)
+                || s.contains(
+                    rfvp::script::context::ThreadState::CONTEXT_STATUS_DISSOLVE_WAIT,
+                )
         });
         if !any_running {
             stop_why = "无RUNNING context（稳定）".to_string();
@@ -288,7 +422,8 @@ fn main() {
     let graphs = mm.graphs();
     let (v3dx, v3dy, v3dz) = (mm.get_v3d_x(), mm.get_v3d_y(), mm.get_v3d_z());
 
-    // 贴图导出（去重）：texture_id -> png 路径（按绘制序走，日志即画序）。
+    // 终帧取图：时间线已在 tick 循环里全量落盘（g<tid>_<k>.png），这里只按绘制序
+    // 挑终帧可见 tid 的最新文件。alpha==0 真机不遮挡也不可见，跳过。
     let mut tex_path: HashMap<i16, String> = HashMap::new();
     let mut seen: HashSet<i16> = HashSet::new();
     for &(_base, draw_id, is_group) in &order {
@@ -296,7 +431,6 @@ fn main() {
             continue;
         }
         let p = &snap.prims[draw_id as usize];
-        // alpha==0 真机不遮挡也不可见：不导出（省纹理加载；占位顺序无意义）。
         if p.alpha == 0 {
             continue;
         }
@@ -304,20 +438,12 @@ fn main() {
         if tid < 0 || !seen.insert(tid) {
             continue;
         }
-        let Some(g) = graphs.get(tid as usize) else {
-            continue;
-        };
-        let Some(img) = g.get_texture().as_ref() else {
-            continue;
-        };
-        let path = format!("{}/g{}.png", png_dir, tid);
-        // DynamicImage 与本 crate image(=0.24.9) 同实例，直接存。
-        if let Err(e) = img.save(&path) {
-            eprintln!("[vm] 贴图导出失败 g{}: {}", tid, e);
-            continue;
+        if let Some(path) = tex_file.get(&tid) {
+            eprintln!("[vm] prim#{} texture g{} -> {}", draw_id, tid, path);
+            tex_path.insert(tid, path.clone());
+        } else {
+            eprintln!("[vm] prim#{} texture g{} 时间线无文件（槽空），跳过", draw_id, tid);
         }
-        eprintln!("[vm] prim#{} texture g{} -> {} ({}x{})", draw_id, tid, path, g.get_width(), g.get_height());
-        tex_path.insert(tid, path);
     }
 
     // 组 A 轨 JSON（字段名与 app 的 PrimSer 对齐；数组即绘制序，app 照序画）。

@@ -1,0 +1,24 @@
+diff --git a/crates/rfvp/src/subsystem/world.rs b/crates/rfvp/src/subsystem/world.rs
+--- a/crates/rfvp/src/subsystem/world.rs
++++ b/crates/rfvp/src/subsystem/world.rs
+@@ -408,6 +408,13 @@ impl GameData {
+         &mut self.motion_manager
+     }
+
++    // FVP-PREVIEW-VM (scratch-only): let the headless vm inject synthetic
++    // mouse clicks (--auto-click) to walk through click-to-continue waits.
++    // Not for upstream.
++    pub fn inputs_manager_mut(&mut self) -> &mut InputManager {
++        &mut self.inputs_manager
++    }
++
++    // FVP-PREVIEW-VM (scratch-only): headless frame clock for timers
++    // (hosts tick this per frame; without it TimerGet waits never expire).
++    // Not for upstream.
++    pub fn timer_manager_mut(&mut self) -> &mut TimerManager {
++        &mut self.timer_manager
++    }
++
+     pub fn vfs_load_file(&self, path: &str) -> anyhow::Result<Vec<u8>> {
+         self.vfs.read_file(path)
+     }
