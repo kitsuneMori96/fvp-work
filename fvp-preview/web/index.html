@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>fvp-preview web</title>
+<style>
+  body { margin:0; background:#111; color:#ddd; font-family:sans-serif; display:flex; height:100vh; }
+  #left { flex:1; overflow:auto; display:flex; align-items:flex-start; justify-content:center; background:#111; }
+  canvas { background:#181818; margin:12px; image-rendering:auto; cursor:crosshair; }
+  #right { width:300px; min-width:300px; border-left:1px solid #333; overflow-y:auto; padding:8px; font-size:13px; }
+  #topbar { position:fixed; top:0; left:0; right:300px; background:#1c1c1c; padding:4px 10px; font-size:12px; border-bottom:1px solid #333; z-index:5;}
+  #wrap { padding-top:30px; display:flex; width:100%; height:100%; box-sizing:border-box;}
+  h3 { margin:10px 0 4px; font-size:13px; color:#fff;}
+  .row { display:flex; align-items:center; gap:6px; padding:2px 0;}
+  .row.sel { background:#2a3a55; }
+  button { background:#2a2a2a; color:#ddd; border:1px solid #555; border-radius:4px; padding:2px 8px; cursor:pointer;}
+  button:hover { background:#3a3a3a; }
+  input[type=number] { width:70px; background:#222; color:#ddd; border:1px solid #555; border-radius:3px;}
+  input[type=text] { background:#222; color:#ddd; border:1px solid #555; border-radius:3px;}
+  .unmapped { color:#f66; }
+  .ok { color:#8f8; } .bad { color:#f66; }
+  #layers, #replaylist { max-height:200px; overflow-y:auto; border:1px solid #333; }
+  small { color:#999; }
+  #selftest { font-weight:bold; }
+</style>
+</head>
+<body>
+<div id="topbar"><span id="status">未加载</span> <span id="dpinfo" style="color:#999"></span> <span id="selftest"></span></div>
+<div id="wrap">
+<div id="left"><canvas id="cv" width="1280" height="720"></canvas></div>
+<div id="right">
+  <h3>场景</h3>
+  <div class="row"><button id="btnSample">载入示例工程</button><button id="btnFiles">文件…</button></div>
+  <div class="row"><small>scene <input type="file" id="fScene" accept=".json"></small></div>
+  <div class="row"><small>replay <input type="file" id="fReplay" accept=".json"></small></div>
+  <div class="row"><small>addrmap <input type="file" id="fMap" accept=".json"></small></div>
+  <h3>脚本序列 <span id="rCount"></span></h3>
+  <div class="row"><button id="rPrev">◀</button><input type="range" id="rSlider" min="0" max="0" value="0" style="flex:1"><button id="rNext">▶</button></div>
+  <div class="row"><small id="rLabel">无回放</small></div>
+  <div class="row"><button id="btnExport">导出PNG系列</button><small id="expStatus"></small></div>
+  <h3>图层（顶→底）</h3>
+  <div id="layers"></div>
+  <div class="row"><button id="btnClearHide">全部恢复</button></div>
+  <h3>编辑 <span id="edId"></span></h3>
+  <div id="editor"></div>
+  <h3>写回</h3>
+  <div id="pending"></div>
+  <div class="row"><button id="btnWrite">写回 HCB</button></div>
+  <div class="row"><small id="writeStatus"></small></div>
+  <div class="row"><small>hcb <input type="text" id="hcbPath" size="28" placeholder="由服务端配置"></small></div>
+</div>
+</div>
+<script>
+"use strict";
+// ---------------- 数学（直译 core/src/{affine,model}.rs） ----------------
+const TAU = Math.PI * 2;
+const I2 = () => ({m11:1,m12:0,m21:0,m22:1,tx:0,ty:0});
+const TR = (x,y) => ({m11:1,m12:0,m21:0,m22:1,tx:x,ty:y});
+const SC = (x,y) => ({m11:x,m12:0,m21:0,m22:y,tx:0,ty:0});
+const RO = (r) => { const c=Math.cos(r), s=Math.sin(r); return {m11:c,m12:-s,m21:s,m22:c,tx:0,ty:0}; };
+function MUL(a,b){ return {
+  m11:a.m11*b.m11+a.m12*b.m21, m12:a.m11*b.m12+a.m12*b.m22,
+  m21:a.m21*b.m11+a.m22*b.m21, m22:a.m21*b.m12+a.m22*b.m22,
+  tx:a.m11*b.tx+a.m12*b.ty+a.tx,  ty:a.m21*b.tx+a.m22*b.ty+a.ty }; }
+function CHAIN(ms){ return ms.reduce((a,b)=>MUL(a,b)); }
+function TP(m,x,y){ return [m.m11*x+m.m12*y+m.tx, m.m21*x+m.m22*y+m.ty]; }
+function INV(m){ const d=m.m11*m.m22-m.m12*m.m21; if(Math.abs(d)<1e-12) return null;
+  const q=1/d, a=m.m22*q, b=-m.m12*q, c=-m.m21*q, e=m.m11*q;
+  return {m11:a,m12:b,m21:c,m22:e,tx:-(a*m.tx+b*m.ty),ty:-(c*m.tx+e*m.ty)}; }
+function pivotOf(p){ return (p.attr&2) ? [p.opx||0, p.opy||0] : [p.u||0, p.v||0]; }
+function buildModel(p, px, py, cam, vp){
+  const theta = -(p.angle||0)*TAU/3600;
+  const X = px+(p.x||0), Y = py+(p.y||0);
+  const [qx,qy] = pivotOf(p);
+  const lx = (p.off_x||0)-qx, ly = (p.off_y||0)-qy;
+  if ((p.attr&4)){
+    const cx=vp.w*0.5, cy=vp.h*0.5;
+    let fx=p.factor_x??1000, fy=p.factor_y??1000;
+    if (Math.abs(fx)<1e-6) fx=1; if (Math.abs(fy)<1e-6) fy=1;
+    let depth=(p.z||0)-(cam.z||0); if (Math.abs(depth)<1e-3) depth=1;
+    const sx=fx/depth, sy=fy/depth;
+    const shx=1000*(cam.x||0)/fx, shy=1000*(cam.y||0)/fy;
+    return CHAIN([TR(cx,cy),SC(sx,sy),TR(X-shx,Y-shy),RO(theta),TR(lx,ly)]);
+  }
+  const sx=(p.factor_x??1000)/1000, sy=(p.factor_y??1000)/1000;
+  return CHAIN([TR(X+qx,Y+qy),SC(sx,sy),RO(theta),TR(lx,ly)]);
+}
+// ---------------- 自测（core/model.rs 12 单测的输入输出） ----------------
+function selfTest(){
+  const VP={w:800,h:600}, C0={x:0,y:0,z:0};
+  const B=()=>({x:0,y:0,z:0,angle:0,factor_x:1000,factor_y:1000,attr:0,opx:0,opy:0,u:0,v:0,off_x:0,off_y:0});
+  const eq=(a,b)=>Math.abs(a[0]-b[0])<1e-3&&Math.abs(a[1]-b[1])<1e-3;
+  const T=[];
+  let p=B(); p.x=100;p.y=200; T.push(eq(TP(buildModel(p,0,0,C0,VP),10,20),[110,220]));
+  p=B(); p.angle=900; T.push(eq(TP(buildModel(p,0,0,C0,VP),10,0),[0,-10]));
+  p=B(); p.u=7;p.v=9; T.push(JSON.stringify(pivotOf(p))===JSON.stringify([7,9]));
+  p.attr=2;p.opx=50;p.opy=60; T.push(JSON.stringify(pivotOf(p))===JSON.stringify([50,60]));
+  p=B(); p.x=100;p.y=100;p.attr=2;p.opx=50;p.opy=50; T.push(eq(TP(buildModel(p,0,0,C0,VP),0,0),[100,100]));
+  p=B(); p.x=100;p.y=50;p.z=1100;p.attr=4; T.push(eq(TP(buildModel(p,0,0,{x:0,y:0,z:100},VP),0,0),[500,350]));
+  p=B(); p.x=100;p.y=50;p.z=1100;p.attr=4; T.push(eq(TP(buildModel(p,0,0,{x:200,y:0,z:100},VP),0,0),[300,350]));
+  p=B(); p.x=100;p.y=50;p.z=1100;p.attr=6;p.opx=50;p.opy=50;
+  T.push(eq(TP(buildModel(p,0,0,{x:0,y:0,z:100},VP),0,0),[450,300]));
+  p.attr=2; T.push(eq(TP(buildModel(p,0,0,C0,VP),0,0),[100,50]));
+  p=B(); p.z=500;p.attr=4; T.push(eq(TP(buildModel(p,0,0,{x:0,y:0,z:500},VP),1,0),[1400,300]));
+  p=B(); p.z=1000;p.factor_x=0;p.factor_y=1000;p.attr=4; T.push(eq(TP(buildModel(p,0,0,C0,VP),1000,0),[401,300]));
+  p=B(); p.x=100;p.y=200; T.push(eq(TP(buildModel(p,30,40,C0,VP),0,0),[130,240]));
+  p=B(); p.factor_x=2000;p.factor_y=500; T.push(eq(TP(buildModel(p,0,0,C0,VP),10,10),[20,5]));
+  return T;
+}
+// ---------------- 状态 ----------------
+const cv = document.getElementById('cv'), ctx2d = cv.getContext('2d');
+let scene=null, replay=null, ridx=0, addrmap={};
+let selected=null, hidden=new Set(), solo=null, orig=new Map(), texCache=new Map();
+let zoom=1;
+const FIELDS=[["x","px整数"],["y","px整数"],["z","100..10000透视除数"],["angle","十分之一度%3600"],["fx","千分比"],["fy","千分比"],["attr","bit:2=OP,4=透视"],["opx","px(需attr&2)"],["opy","px(需attr&2)"],["alpha","0..255"]];
+function P(p,k,d){ const v=p[k]; return (v===undefined||v===null)?d:v; }
+function params(p){ return {x:P(p,'x',0),y:P(p,'y',0),z:P(p,'z',0),angle:P(p,'angle',0),factor_x:P(p,'fx',1000),factor_y:P(p,'fy',1000),attr:P(p,'attr',0),opx:P(p,'opx',0),opy:P(p,'opy',0),u:P(p,'u',0),v:P(p,'v',0),off_x:P(p,'off_x',0),off_y:P(p,'off_y',0)}; }
+// ---------------- 树序（DFS，draw=false 连子树跳过，父 x/y 累加） ----------------
+function drawOrder(prms){
+  const idx=new Map(prms.map((p,i)=>[p.id,i])), kids=new Map();
+  prms.forEach((p,i)=>{ const k=(p.parent!=null&&idx.has(p.parent))?p.parent:null;
+    if(!kids.has(k))kids.set(k,[]); kids.get(k).push(i); });
+  const out=[], stack=(kids.get(null)||[]).map(i=>({i,px:0,py:0,hid:false})); stack.reverse();
+  let g=0;
+  while(stack.length){ if(++g>65536)break; const {i,px,py,hid}=stack.pop();
+    const p=prms[i], h=hid||!P(p,'draw',true);
+    if(!h) out.push({i,px,py});
+    const ch=kids.get(p.id)||[];
+    for(let k=ch.length-1;k>=0;k--) stack.push({i:ch[k],px:px+(P(p,'x',0)),py:py+(P(p,'y',0)),hid:h});
+  }
+  return out;
+}
+function visible(id){ if(solo!==null) return id===solo; return !hidden.has(id); }
+// ---------------- 贴图 ----------------
+function texURL(path){ return '/api/tex?path='+encodeURIComponent(path); }
+function loadTex(path){ if(!path) return Promise.resolve(null);
+  if(texCache.has(path)) return texCache.get(path);
+  const pr=new Promise(res=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=texURL(path); });
+  texCache.set(path,pr); return pr; }
+// ---------------- 渲染 ----------------
+async function render(){
+  if(!scene){ ctx2d.fillStyle='#181818'; ctx2d.fillRect(0,0,cv.width,cv.height); return; }
+  const vp=scene.viewport, cam=scene.camera||{x:0,y:0,z:0};
+  cv.width=vp.w; cv.height=vp.h;
+  ctx2d.setTransform(1,0,0,1,0,0); ctx2d.globalAlpha=1;
+  ctx2d.fillStyle='#181818'; ctx2d.fillRect(0,0,cv.width,cv.height);
+  const order=drawOrder(scene.prims);
+  for(const {i,px,py} of order){
+    const p=scene.prims[i];
+    if(!p.image||!visible(p.id)) continue;
+    const im=await loadTex(p.image); if(!im) continue;
+    const m=buildModel(params(p),px,py,cam,vp);
+    ctx2d.setTransform(m.m11,m.m21,m.m12,m.m22,m.tx,m.ty);
+    ctx2d.globalAlpha=(P(p,'alpha',255))/255;
+    ctx2d.drawImage(im,0,0);
+  }
+  ctx2d.setTransform(1,0,0,1,0,0); ctx2d.globalAlpha=1;
+  // 选中框
+  if(selected!==null){
+    const o=drawOrder(scene.prims).find(o=>scene.prims[o.i].id===selected);
+    if(o){ const p=scene.prims[o.i], im=await loadTex(p.image);
+      if(im){ const m=buildModel(params(p),o.px,o.py,cam,vp);
+        const c=[[0,0],[im.naturalWidth,0],[im.naturalWidth,im.naturalHeight],[0,im.naturalHeight]].map(q=>TP(m,q[0],q[1]));
+        ctx2d.strokeStyle='yellow'; ctx2d.lineWidth=2; ctx2d.beginPath();
+        c.forEach((q,k)=>k?ctx2d.lineTo(q[0],q[1]):ctx2d.moveTo(q[0],q[1])); ctx2d.closePath(); ctx2d.stroke(); } }
+  }
+  fitZoom();
+}
+function fitZoom(){
+  const availW=document.getElementById('left').clientWidth-24;
+  zoom=Math.min(1,availW/cv.width);
+  cv.style.width=(cv.width*zoom)+'px'; cv.style.height=(cv.height*zoom)+'px';
+  document.getElementById('dpinfo').textContent=`画布${cv.width}x${cv.height}pt · 缩放${Math.round(zoom*100)}%`;
+}
+// ---------------- 场景采用 ----------------
+function adopt(snap,label){
+  scene=JSON.parse(JSON.stringify(snap));
+  orig.clear();
+  scene.prims.forEach(p=>FIELDS.forEach(([f])=>{ if(p[f]!==undefined) orig.set(p.id+':'+f,p[f]); }));
+  if(selected!==null&&!scene.prims.some(p=>p.id===selected)) selected=null;
+  document.getElementById('status').textContent=(label||'已加载')+`：${scene.prims.length} prim`;
+  render(); renderLayers(); renderEditor();
+}
+function gotoRow(i){
+  if(!replay||!replay.rows.length) return;
+  ridx=Math.max(0,Math.min(replay.rows.length-1,i));
+  const r=replay.rows[ridx];
+  adopt({viewport:replay.viewport,camera:replay.camera||{x:0,y:0,z:0},prims:r.prims},`脚本行 ${ridx+1}/${replay.rows.length}`);
+  document.getElementById('rSlider').value=ridx;
+  document.getElementById('rLabel').textContent=`#${r.seq} ${r.label}`;
+}
+// ---------------- 图层 ----------------
+function renderLayers(){
+  const el=document.getElementById('layers'); el.innerHTML='';
+  if(!scene) return;
+  const order=drawOrder(scene.prims); const rev=[...order].reverse();
+  rev.forEach(({i})=>{ const p=scene.prims[i]; if(!p.image) return;
+    const d=document.createElement('div'); d.className='row'+(selected===p.id?' sel':'');
+    const eye=!hidden.has(p.id);
+    d.innerHTML=`<button>${eye?'眼':'··'}</button>`;
+    const b=document.createElement('button'); b.textContent='#'+p.id;
+    b.onclick=()=>{selected=p.id; render(); renderLayers(); renderEditor();};
+    const s=document.createElement('button'); s.textContent='solo'; if(solo===p.id)s.style.background='#5a3a00';
+    s.onclick=()=>{solo=(solo===p.id)?null:p.id; render(); renderLayers();};
+    const info=document.createElement('small'); info.textContent=`${P(p,'x',0)},${P(p,'y',0)} a${P(p,'alpha',255)}`;
+    d.children[0].onclick=()=>{ eye?hidden.add(p.id):hidden.delete(p.id); render(); renderLayers(); };
+    d.append(b,s,info); el.append(d);
+  });
+}
+// ---------------- 编辑 ----------------
+function pendingEdits(){
+  if(!scene) return [];
+  const out=[];
+  scene.prims.forEach(p=>FIELDS.forEach(([f])=>{ const k=p.id+':'+f;
+    if(orig.has(k)&&p[f]!==undefined&&p[f]!==orig.get(k)) out.push({id:p.id,field:f,value:p[f]}); }));
+  return out;
+}
+function renderEditor(){
+  const ed=document.getElementById('editor'); ed.innerHTML='';
+  document.getElementById('edId').textContent=selected===null?'(点击图层或画布选中)':'#'+selected;
+  if(selected===null||!scene) return;
+  const p=scene.prims.find(q=>q.id===selected); if(!p) return;
+  FIELDS.forEach(([f,unit])=>{ if(p[f]===undefined) return;
+    const mapped=addrmap[p.id]&&addrmap[p.id][f]!==undefined;
+    const d=document.createElement('div'); d.className='row';
+    const lab=document.createElement('span'); lab.textContent=f; if(!mapped)lab.className='unmapped';
+    const inp=document.createElement('input'); inp.type='number'; inp.value=p[f]; inp.step=1;
+    inp.onchange=()=>{ p[f]=parseInt(inp.value||'0',10); render(); renderLayers(); renderEditor(); };
+    const u=document.createElement('small'); u.textContent=unit;
+    d.append(lab,inp,u); ed.append(d);
+  });
+  const pe=document.getElementById('pending');
+  const edits=pendingEdits();
+  pe.innerHTML=edits.length?edits.slice(0,12).map(e=>{const o=orig.get(e.id+':'+e.field);
+    return `<div><small>#${e.id} ${e.field}: ${o} → ${e.value}</small></div>`;}).join('')+`<small>待写回 ${edits.length} 项</small>`:'<small>无改动</small>';
+}
+// ---------------- 画布交互 ----------------
+function evPos(e){ const r=cv.getBoundingClientRect(); return [(e.clientX-r.left)/zoom,(e.clientY-r.top)/zoom]; }
+async function hitTest(x,y){
+  if(!scene) return null;
+  const vp=scene.viewport, cam=scene.camera||{x:0,y:0,z:0};
+  const order=drawOrder(scene.prims); 
+  for(let k=order.length-1;k>=0;k--){ const {i,px,py}=order[k], p=scene.prims[i];
+    if(!p.image||!visible(p.id)) continue;
+    const im=await loadTex(p.image); if(!im) continue;
+    const inv=INV(buildModel(params(p),px,py,cam,vp)); if(!inv) continue;
+    const [lx,ly]=TP(inv,x,y);
+    if(lx>=0&&ly>=0&&lx<=im.naturalWidth&&ly<=im.naturalHeight) return p.id;
+  }
+  return null;
+}
+let dragging=false,lastXY=null;
+cv.addEventListener('mousedown',async e=>{ const [x,y]=evPos(e);
+  selected=await hitTest(x,y); dragging=true; lastXY=[x,y]; render(); renderLayers(); renderEditor(); });
+window.addEventListener('mousemove',e=>{ if(!dragging||selected===null||!scene) return;
+  const [x,y]=evPos(e), dx=Math.round(x-lastXY[0]), dy=Math.round(y-lastXY[1]);
+  if(dx||dy){ const p=scene.prims.find(q=>q.id===selected);
+    if(p&&(p.x!==undefined)){ p.x+=dx; p.y+=dy; lastXY=[x,y]; render(); renderLayers(); renderEditor(); } } });
+window.addEventListener('mouseup',()=>dragging=false);
+// ---------------- 文件 ----------------
+function readJSON(file){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>{try{res(JSON.parse(r.result))}catch(e){res(null)}}; r.readAsText(file); }); }
+document.getElementById('fScene').onchange=async e=>{ const s=await readJSON(e.target.files[0]); if(s&&s.prims)adopt(s,'已加载'); };
+document.getElementById('fReplay').onchange=async e=>{ const r=await readJSON(e.target.files[0]);
+  if(r&&r.rows){ replay=r; ridx=0;
+    document.getElementById('rSlider').max=r.rows.length-1;
+    document.getElementById('rCount').textContent=`${r.rows.length}行`; gotoRow(0); } };
+document.getElementById('fMap').onchange=async e=>{ const m=await readJSON(e.target.files[0]);
+  if(m&&m.addrmap)addrmap=m.addrmap; renderEditor(); };
+document.getElementById('rPrev').onclick=()=>gotoRow(ridx-1);
+document.getElementById('rNext').onclick=()=>gotoRow(ridx+1);
+document.getElementById('rSlider').oninput=e=>gotoRow(parseInt(e.target.value,10));
+document.getElementById('btnClearHide').onclick=()=>{hidden.clear();solo=null;render();renderLayers();};
+window.addEventListener('resize',()=>{ if(scene) fitZoom(); });
+// ---------------- 服务端联动 ----------------
+async function api(path,opts){ const r=await fetch(path,opts); return r.json(); }
+document.getElementById('btnSample').onclick=async ()=>{
+  try{ const [s,r,m]=await Promise.all([api('/api/scene'),api('/api/replay'),api('/api/addrmap').catch(()=>null)]);
+    if(s&&s.prims)adopt(s,'示例工程');
+    if(r&&r.rows){replay=r;ridx=0;document.getElementById('rSlider').max=r.rows.length-1;
+      document.getElementById('rCount').textContent=`${r.rows.length}行`;gotoRow(0);}
+    if(m&&m.addrmap)addrmap=m.addrmap;
+    const h=await api('/api/paths').catch(()=>null);
+    if(h&&h.hcb)document.getElementById('hcbPath').value=h.hcb;
+  }catch(e){ document.getElementById('status').textContent='服务端未连接（用文件按钮本地加载）'; }
+};
+document.getElementById('btnFiles').onclick=()=>document.getElementById('fScene').click();
+document.getElementById('btnWrite').onclick=async ()=>{
+  const edits=pendingEdits();
+  const unmapped=edits.filter(e=>!(addrmap[e.id]&&addrmap[e.id][e.field]!==undefined));
+  const st=document.getElementById('writeStatus');
+  if(unmapped.length){ st.innerHTML=`<span class="bad">拒绝：无常量源 ${unmapped.map(e=>e.id+'.'+e.field).join(',')}</span>`; return; }
+  if(!edits.length){ st.textContent='无改动'; return; }
+  try{ const r=await api('/api/writeback',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({edits,hcb:document.getElementById('hcbPath').value||undefined})});
+    st.innerHTML=r.ok?`<span class="ok">写回成功 → ${r.out}</span>`:`<span class="bad">写回失败：${r.error}</span>`;
+  }catch(e){ st.innerHTML=`<span class="bad">服务端错误：${e}</span>`; }
+};
+document.getElementById('btnExport').onclick=async ()=>{
+  if(!replay||!replay.rows.length) return;
+  const st=document.getElementById('expStatus');
+  const cur=ridx;
+  for(let i=0;i<replay.rows.length;i++){
+    gotoRow(i); await new Promise(r=>setTimeout(r,30));
+    const a=document.createElement('a');
+    a.download=`row_${String(replay.rows[i].seq).padStart(5,'0')}.png`;
+    a.href=cv.toDataURL('image/png'); a.click();
+    st.textContent=`${i+1}/${replay.rows.length}`;
+    await new Promise(r=>setTimeout(r,120));
+  }
+  gotoRow(cur); st.textContent+=' 完成';
+};
+// ---------------- 启动自测 ----------------
+(function(){
+  const T=selfTest(), ok=T.filter(Boolean).length;
+  const el=document.getElementById('selftest');
+  el.textContent=`MATH ${ok}/${T.length}`; el.className=ok===T.length?'ok':'bad';
+})();
+</script>
+</body>
+</html>

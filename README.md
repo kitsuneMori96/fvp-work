@@ -32,8 +32,14 @@
   永不上公开仓库.**
 - `fvp-preview/` — HCB 可视化编辑器 (坐标语义预览, 不复刻引擎):
   - `core/` — 坐标变换库 (`build_draw_model` 等价实现, 零依赖, 15 单测).
-  - `app/` — egui 预览+编辑 (`cat scene.json | fvp-preview --addrmap
-    traced_addrmap.json --hcb 原.hcb --out-hcb 新.hcb`; 点选/拖拽/数字面板/写回).
+  - `web/index.html` — **网页预览 (默认工作流, 单文件零依赖)**:
+    canvas 2D 按绘制序画 quad, 数学直译自 `core` (加载自测 `MATH 13/13`);
+    图层 eye/solo/行选、脚本序列步进、拖拽改 x/y、数字面板、PNG 系列导出。
+  - `serve_editor.py` — 本地微服务 (标准库 only): 静态页 + 场景/回放/贴图,
+    `POST /api/writeback` 一键调 `patch_hcb.py` (等宽三校验, 绝不覆盖原文件)。
+    启动: `python3 serve_editor.py --sample-dir /tmp/fvp-sample [...]`,
+    浏览器开 `http://localhost:8000`。
+  - `app/` — eframe 桌面版 (已冻结保留, 不再投入; WSLg DPI 问题见 commit 记录).
   - `vm/` — 真 HCB 运行器 (快照导出 `--ref-png` 标尺, `--trace-syscall` 溯源).
   - `extract_scene.py` — 反汇编工程 -> 静态场景 JSON+地址映射 (常量脚本用).
   - `trace_join.py` — syscall trace + 反汇编 join -> 动态 last-write 映射
