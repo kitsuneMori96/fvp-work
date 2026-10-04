@@ -184,8 +184,9 @@ def main():
             applied += 1
 
             if name == "PrimSetSprt":
-                # 全重置 (graph.rs prim_set_sprt), x/y Nil->0
-                p.update({"type": "Sprt", "opx": 0, "opy": 0, "alpha": 255,
+                # 全重置 (graph.rs prim_set_sprt), x/y Nil->0;
+                # prim_init_with_type 置 draw=true（渲染相关，不可省）。
+                p.update({"type": "Sprt", "draw": True, "opx": 0, "opy": 0, "alpha": 255,
                           "angle": 0, "fx": 1000, "fy": 1000, "u": 0, "v": 0,
                           "w": 0, "h": 0, "z": 1000, "attr": 0,
                           "src": I(1) if I(1) is not None and -2 <= I(1) <= 4095 else -1,
@@ -240,6 +241,7 @@ def main():
                     mark(pid, "w", prevs[1], I(1)); p["w"] = I(1)
                 if I(2) is not None:
                     mark(pid, "h", prevs[2], I(2)); p["h"] = I(2)
+                p["attr"] |= 0x01  # WH 同样置 use-rect 位（prim_set_wh 尾）
             elif name == "PrimSetUV":
                 if I(1) is not None:
                     mark(pid, "u", prevs[1], I(1)); p["u"] = I(1)
@@ -253,12 +255,14 @@ def main():
                 if grp is not None and 0 <= grp <= 4095 and child != grp:
                     g = P(grp)
                     g["type"] = "Group"
+                    g["draw"] = True  # init 置位
                     g["x"] = g["y"] = 0  # Group 化清零
                     p["parent"] = grp
             elif name == "PrimGroupOut":
                 p["parent"] = None
             elif name == "PrimSetNull":
                 prims[pid] = new_prim()
+                prims[pid]["draw"] = True  # init 置位（type=None 照样不画）
         idx += 1
 
     # 输出: app Snapshot 单行 JSON (u/v/off 静态未知, Phase2 用图头回填; 当前为 0)

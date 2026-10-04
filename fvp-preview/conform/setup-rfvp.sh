@@ -34,13 +34,15 @@ EOF
 sed -i 's|rfvp = { path = "../rfvp" }|rfvp = { path = "../rfvp", default-features = false, features = ["soft-render-core"] }|' \
   crates/assembler/Cargo.toml crates/disassembler/Cargo.toml
 
-# conform accessor patch（3 个 pub accessor，scratch 专用，不进上游）。
-PATCH="../fvp-work/fvp-preview/conform/rfvp-patches/0001-conform-accessors.patch"
-if [ -f "$PATCH" ]; then
-  git apply --check "$PATCH" 2>/dev/null && git apply "$PATCH" && echo "conform patch applied" || echo "conform patch already applied, skip"
-else
-  echo "WARN: patch not found at $PATCH" >&2
-fi
+# scratch patches（专用，不进上游）：按文件名顺序全打，有则跳过。
+for PATCH in ../fvp-work/fvp-preview/conform/rfvp-patches/*.patch; do
+  [ -f "$PATCH" ] || continue
+  if git apply --check "$PATCH" 2>/dev/null; then
+    git apply "$PATCH" && echo "patch applied: $(basename "$PATCH")"
+  else
+    echo "patch already applied, skip: $(basename "$PATCH")"
+  fi
+done
 
 # 字体桩：28MB MS 字体被稀疏排除（include_bytes! 需要文件存在）。
 # headless conformance 不渲染文字，任意有效 TTF 顶替即可。

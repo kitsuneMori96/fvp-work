@@ -117,6 +117,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     em("init_stack", 0, 0)
+    grp(18, 0)  # 容器组挂根：render 走 root 0，不挂则整树不可见
     grp(186, 18)
     gload(186, "graph_bg/BG001_020")
     sprt(186)

@@ -46,6 +46,27 @@ struct Snapshot {
     prims: Vec<PrimSer>,
 }
 
+/// 脚本序列回放文件（replay_ops.py 产出）：每行=执行到该处的场景。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ReplayFile {
+    #[serde(default = "default_viewport")]
+    viewport: ViewportSer,
+    #[serde(default)]
+    camera: CameraSer,
+    #[serde(default)]
+    rows: Vec<ReplayRow>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ReplayRow {
+    #[serde(default)]
+    seq: u64,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    prims: Vec<PrimSer>,
+}
+
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 struct ViewportSer {
     w: f32,
@@ -190,6 +211,8 @@ struct PreviewApp {
     status: String,
     /// 当前窗口匹配的 viewport（变化时发 resize，保证画布与游戏同分辨率 1:1）。
     win_vp: Option<(f32, f32)>,
+    /// DPI 诊断计数器。
+    dpi_tick: u64,
     /// 编辑状态
     selected: Option<i32>,
     /// 快照原始值（新快照到达时重建）：(id, field) -> 原值。
@@ -200,6 +223,12 @@ struct PreviewApp {
     hcb_path: Option<String>,
     out_hcb_path: Option<String>,
     patch_status: String,
+    /// 图层 eye（隐藏集合）与 solo 独显：编辑器本地预览状态，不进快照不写回。
+    hidden: std::collections::HashSet<i32>,
+    solo: Option<i32>,
+    /// 脚本序列回放（--replay）：行点击即渲染执行到该处的场景。
+    replay: Option<ReplayFile>,
+    ridx: usize,
 }
 
 impl PreviewApp {
@@ -208,6 +237,7 @@ impl PreviewApp {
         addrmap_path: Option<String>,
         hcb_path: Option<String>,
         out_hcb_path: Option<String>,
+        replay_path: Option<String>,
     ) -> Self {
         let mappable = addrmap_path
             .as_deref()
@@ -235,6 +265,7 @@ impl PreviewApp {
             textures: HashMap::new(),
             status: "等待快照（stdin JSON）…".to_string(),
             win_vp: None,
+            dpi_tick: 0,
             selected: None,
             orig: HashMap::new(),
             mappable,
@@ -242,49 +273,106 @@ impl PreviewApp {
             hcb_path,
             out_hcb_path,
             patch_status: String::new(),
+            hidden: std::collections::HashSet::new(),
+            solo: None,
+            ridx: 0,
+            replay: replay_path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|t| serde_json::from_str::<ReplayFile>(&t).ok()),
         }
     }
 
-    fn poll_stdin(&mut self, ctx: &egui::Context) {
-        let mut updated = false;
-        while let Ok(snap) = self.rx.try_recv() {
-            self.scene = Some(snap);
-            updated = true;
-        }
-        if updated {
-            // 新快照：重建原始值表，选中保留（按 id），跨快照的编辑丢弃并提示。
-            self.orig.clear();
-            if let Some(scene) = &self.scene {
-                for p in &scene.prims {
-                    for f in EDIT_FIELDS {
-                        if let Some((v, _)) = p.field(f) {
-                            self.orig.insert((p.id, f.to_string()), v);
-                        }
-                    }
-                }
-                if let Some(sel) = self.selected {
-                    if !scene.prims.iter().any(|p| p.id == sel) {
-                        self.selected = None;
+    /// 采用新场景：重建原始值表，选中按 id 保留，跨场景编辑丢弃。
+    fn adopt_scene(&mut self, snap: Snapshot, ctx: &egui::Context) {
+        self.scene = Some(snap);
+        self.orig.clear();
+        if let Some(scene) = &self.scene {
+            for p in &scene.prims {
+                for f in EDIT_FIELDS {
+                    if let Some((v, _)) = p.field(f) {
+                        self.orig.insert((p.id, f.to_string()), v);
                     }
                 }
             }
-            let n = self.scene.as_ref().map(|s| s.prims.len()).unwrap_or(0);
-            self.status = format!("已加载快照：{} prim", n);
-            ctx.request_repaint();
+            if let Some(sel) = self.selected {
+                if !scene.prims.iter().any(|p| p.id == sel) {
+                    self.selected = None;
+                }
+            }
+        }
+        let n = self.scene.as_ref().map(|s| s.prims.len()).unwrap_or(0);
+        self.status = format!("已加载快照：{} prim", n);
+        // 切行不强制改窗口（viewport 一般不变；变了才跟随）。
+        self.win_vp = None;
+        ctx.request_repaint();
+    }
+
+    /// 切到回放第 i 行（渲染执行到该脚本处的场景）。
+    fn goto_row(&mut self, i: usize, ctx: &egui::Context) {
+        let Some(rep) = self.replay.clone() else { return };
+        if rep.rows.is_empty() {
+            return;
+        }
+        let i = i.min(rep.rows.len() - 1);
+        self.ridx = i;
+        let row = &rep.rows[i];
+        self.adopt_scene(
+            Snapshot {
+                viewport: rep.viewport,
+                camera: rep.camera,
+                prims: row.prims.clone(),
+            },
+            ctx,
+        );
+        self.status = format!("脚本行 {}/{}：{}", i + 1, rep.rows.len(), row.label);
+    }
+
+    fn poll_stdin(&mut self, ctx: &egui::Context) {
+        let mut latest: Option<Snapshot> = None;
+        while let Ok(snap) = self.rx.try_recv() {
+            latest = Some(snap);
+        }
+        if let Some(snap) = latest {
+            self.adopt_scene(snap, ctx);
         }
         // 窗口分辨率跟随游戏 viewport（HCB 可视化编辑器铁律：1:1 同分辨率）。
+        // DPI 跟随系统（默认）：points 语义，物理像素=points×scale；
+        // 窗口尺寸必须含右侧编辑面板+状态栏，否则画布被挤出滚动条（内外不一致）。
         if let Some(scene) = &self.scene {
             let vp = (scene.viewport.w, scene.viewport.h);
             if self.win_vp != Some(vp) && vp.0 > 0.0 && vp.1 > 0.0 {
                 self.win_vp = Some(vp);
-                // +34 为顶部状态栏高度；超出屏幕时用户可缩放窗口，画布走滚动。
+                // 自适应宽度：画布+编辑面板，但钳制在显示器内（WSLg 下超宽窗口
+                // 会直接杀连接：+220 死、+100 活；至少保证画布完整，面板可滚）。
+                let want_w = vp.0 + 220.0;
+                let avail_w = ctx
+                    .input(|i| i.viewport().monitor_size.map(|m| m.x))
+                    .unwrap_or(4096.0);
+                let w = want_w.min(avail_w - 40.0).max(vp.0);
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::Vec2::new(
-                    vp.0,
+                    w,
                     vp.1 + 34.0,
                 )));
                 let n = self.scene.as_ref().map(|s| s.prims.len()).unwrap_or(0);
                 self.status = format!("已加载快照：{} prim（{}x{}）", n, vp.0 as u32, vp.1 as u32);
             }
+        }
+        // DPI 诊断（125% 等系统缩放下的内外一致性排查用）：
+        // 每 60 帧打一次 viewport 点数/窗口点数/scale，避免刷屏。
+        self.dpi_tick += 1;
+        if self.dpi_tick % 60 == 1 {
+            let ppp = ctx.pixels_per_point();
+            let win = ctx.input(|i| i.viewport().inner_rect.map(|r| (r.width(), r.height())));
+            let mon = ctx.input(|i| i.viewport().monitor_size.map(|m| (m.x, m.y)));
+            eprintln!(
+                "[dpi] viewport={:?} win_vp={:?} window_pts={:?} monitor={:?} scale={:.3}",
+                self.scene.as_ref().map(|s| (s.viewport.w, s.viewport.h)),
+                self.win_vp,
+                win,
+                mon,
+                ppp
+            );
         }
     }
 
@@ -322,7 +410,13 @@ impl PreviewApp {
             .map(|t| (t.handle.id(), t.w, t.h))
     }
 
-    /// 点击命中：按绘制序自顶向下，点进任一 quad 即选中（用逆变换判局部矩形）。
+    /// 编辑器本地可见性（eye 开关 / solo）：只影响预览，永不写回。
+    fn visible(&self, id: i32) -> bool {
+        if let Some(solo) = self.solo {
+            return id == solo;
+        }
+        !self.hidden.contains(&id)
+    }
     fn hit_test(
         &mut self,
         ctx: &egui::Context,
@@ -338,7 +432,7 @@ impl PreviewApp {
         order.reverse();
         for (i, px, py) in order {
             let prim = &scene.prims[i];
-            if prim.image.is_empty() {
+            if prim.image.is_empty() || !self.visible(prim.id) {
                 continue;
             }
             let Some((_, w, h)) = self.texture_for(ctx, &prim.image) else {
@@ -464,12 +558,53 @@ impl eframe::App for PreviewApp {
                 ui.label("fvp-preview（A轨快照+编辑）");
                 ui.separator();
                 ui.label(&self.status);
+                ui.separator();
+                // DPI 跟随系统：points×scale=物理像素，三数常驻。
+                ui.small(format!(
+                    "画布{}x{}pt · scale{:.2} · {}x{}px",
+                    self.win_vp.map(|v| v.0 as u32).unwrap_or(0),
+                    self.win_vp.map(|v| v.1 as u32).unwrap_or(0),
+                    ctx.pixels_per_point(),
+                    (self.win_vp.map(|v| v.0).unwrap_or(0.0) * ctx.pixels_per_point()) as u32,
+                    (self.win_vp.map(|v| v.1).unwrap_or(0.0) * ctx.pixels_per_point()) as u32,
+                ));
                 if !self.patch_status.is_empty() {
                     ui.separator();
                     ui.label(&self.patch_status);
                 }
             });
         });
+
+        // 脚本序列条（--replay）：步进脚本行，画布渲染执行到该处的场景。
+        if self.replay.is_some() {
+            egui::TopBottomPanel::bottom("replay").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("脚本");
+                    let n = self.replay.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+                    if n == 0 {
+                        ui.label("（空）");
+                        return;
+                    }
+                    let mut idx = self.ridx;
+                    if ui.button("◀").clicked() && idx > 0 {
+                        idx -= 1;
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut idx, 0..=n - 1).show_value(false),
+                    );
+                    ui.small(format!("{}/{}", idx + 1, n));
+                    if ui.button("▶").clicked() && idx + 1 < n {
+                        idx += 1;
+                    }
+                    if idx != self.ridx {
+                        self.goto_row(idx, ctx);
+                    }
+                    if let Some(row) = self.replay.as_ref().and_then(|r| r.rows.get(self.ridx)) {
+                        ui.small(format!("#{} {}", row.seq, row.label));
+                    }
+                });
+            });
+        }
 
         // 右侧编辑面板（选中 prim 的数值字段 + 写回按钮）。
         egui::SidePanel::right("editor")
@@ -480,8 +615,47 @@ impl eframe::App for PreviewApp {
                     ui.label("无快照");
                     return;
                 };
+                // 图层（顶→底）：eye 只影响预览，solo 独显一层；都不进写回。
+                // 放最前：白场盖住时也能从这里选中下层。
+                ui.heading("图层");
+                if self.solo.is_some() || !self.hidden.is_empty() {
+                    if ui.button("全部恢复").clicked() {
+                        self.solo = None;
+                        self.hidden.clear();
+                    }
+                }
+                let mut order = Self::draw_order(&scene);
+                order.reverse();
+                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                    for (i, _, _) in order {
+                        let p = &scene.prims[i];
+                        if p.image.is_empty() {
+                            continue;
+                        }
+                        ui.horizontal(|ui| {
+                            let eye = !self.hidden.contains(&p.id);
+                            if ui.selectable_label(eye, if eye { "眼" } else { "··" }).clicked() {
+                                if eye {
+                                    self.hidden.insert(p.id);
+                                } else {
+                                    self.hidden.remove(&p.id);
+                                }
+                            }
+                            let is_sel = self.selected == Some(p.id);
+                            if ui.selectable_label(is_sel, format!("#{}", p.id)).clicked() {
+                                self.selected = Some(p.id);
+                            }
+                            let is_solo = self.solo == Some(p.id);
+                            if ui.selectable_label(is_solo, "solo").clicked() {
+                                self.solo = if is_solo { None } else { Some(p.id) };
+                            }
+                            ui.small(format!("{},{} a{}", p.x, p.y, p.alpha));
+                        });
+                    }
+                });
+                ui.separator();
                 let Some(sel) = self.selected else {
-                    ui.label("点击画布选中 prim");
+                    ui.label("点击图层行或画布选中 prim");
                     return;
                 };
                 let Some(pos) = scene.prims.iter().position(|p| p.id == sel) else {
@@ -582,10 +756,16 @@ impl eframe::App for PreviewApp {
                         }
                     }
                     let painter = ui.painter_at(canvas_rect);
+                    // 画布不透明底：任何“没画上”都显示为深灰而非系统透明，
+                    // 白图与空画布一眼可辨（125% 缩放合成问题排查用）。
+                    painter.rect_filled(canvas_rect, 0.0, egui::Color32::from_gray(24));
                     // 选中框：选中 prim 的 quad 描边。
                     let mut sel_corners: Option<[CorePos2; 4]> = None;
                     for (i, px, py) in Self::draw_order(&scene) {
                         let prim = &scene.prims[i];
+                        if !self.visible(prim.id) {
+                            continue;
+                        }
                         let Some((tex_id, w, h)) = self.texture_for(ctx, &prim.image) else {
                             continue;
                         };
@@ -659,12 +839,14 @@ fn main() -> eframe::Result<()> {
     let mut addrmap_path: Option<String> = None;
     let mut hcb_path: Option<String> = None;
     let mut out_hcb_path: Option<String> = None;
+    let mut replay_path: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--addrmap" => addrmap_path = args.next(),
             "--hcb" => hcb_path = args.next(),
             "--out-hcb" => out_hcb_path = args.next(),
+            "--replay" => replay_path = args.next(),
             other => {
                 eprintln!("[fvp-preview] 忽略未知参数: {}", other);
             }
@@ -704,7 +886,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             setup_cjk_font(&cc.egui_ctx);
-            Box::new(PreviewApp::new(rx, addrmap_path, hcb_path, out_hcb_path))
+            Box::new(PreviewApp::new(rx, addrmap_path, hcb_path, out_hcb_path, replay_path))
         }),
     )
 }
@@ -752,7 +934,7 @@ mod tests {
     #[test]
     fn pending_edits_diff() {
         let (_tx, rx) = mpsc::channel::<Snapshot>();
-        let mut app = PreviewApp::new(rx, None, None, None);
+        let mut app = PreviewApp::new(rx, None, None, None, None);
         let mut scene = Snapshot {
             viewport: ViewportSer { w: 1280.0, h: 720.0 },
             camera: CameraSer::default(),
@@ -777,7 +959,7 @@ mod tests {
     fn writeback_refuses_unmapped() {
         let (_tx, rx) = mpsc::channel::<Snapshot>();
         // 缺参数 -> 直接拒绝。
-        let app = PreviewApp::new(rx, None, Some("a.hcb".into()), Some("b.hcb".into()));
+        let app = PreviewApp::new(rx, None, Some("a.hcb".into()), Some("b.hcb".into()), None);
         let msg = app.run_writeback(&[(7, "x".to_string(), 5)]);
         assert!(msg.contains("写回需要"), "got: {}", msg);
         // 参数齐但映射表读不到 -> 无源字段拒绝（还没调到脚本）。
@@ -787,8 +969,20 @@ mod tests {
             Some("/nonexistent.json".into()),
             Some("a.hcb".into()),
             Some("b.hcb".into()),
+            None,
         );
         let msg2 = app2.run_writeback(&[(7, "x".to_string(), 5)]);
         assert!(msg2.contains("无常量源"), "got: {}", msg2);
+    }
+
+    #[test]
+    fn replay_row_file_parses() {
+        let t = r#"{"viewport":{"w":1280.0,"h":720.0},"camera":{},"rows":[
+            {"seq":4,"label":"PrimSetSprt 186,186,-,-","prims":[]},
+            {"seq":5,"label":"PrimSetXY 186,0,0","prims":[]}]}"#;
+        let rep: ReplayFile = serde_json::from_str(t).unwrap();
+        assert_eq!(rep.rows.len(), 2);
+        assert_eq!(rep.rows[1].label, "PrimSetXY 186,0,0");
+        assert_eq!(rep.viewport.w, 1280.0);
     }
 }
