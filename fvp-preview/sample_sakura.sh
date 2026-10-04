@@ -1,6 +1,7 @@
 #!/bin/bash
 # 真机开场示例工程：从实际游戏 HCB 开头实录（vm 运行 + trace + 回放 + 映射）。
 # 贴图/产物只落本地 $SAMPLE_DIR，不进仓库（游戏本体）。
+# 注意：SAMPLE_DIR 必须一次到位，事后 mv 会导致 scene/replay 内绝对路径悬空。
 # 用法：export FVP_BASE_PATH=/path/to/game
 #   bash sample_sakura.sh <game.hcb> [SAMPLE_DIR] [TICKS]
 # 之后：bash start_editor.sh [SAMPLE_DIR]（或 serve_editor.py --sample-dir …）

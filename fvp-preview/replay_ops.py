@@ -9,6 +9,7 @@ Z 三形态/OP 仅 Sprt/GroupIn 建组清零), 只是值来自动态 trace 而�
 写入会在此现形, 属已知近似).
 """
 import json
+import os
 import re
 import sys
 
@@ -135,9 +136,21 @@ def main():
     # GraphLoad(有名)必 dirty（同名重载也一样）故必有 save；GraphRGB(100,100,100)是
     # 字节级 no-op 无 save；PartsSelect 落空（parts 未载等）无 save——都没 save 就不换图。
     saves = {}        # (tick, tid) -> [{path,w,h,ox,oy,u,v}...]
-    cur_file = {}     # tid -> 当前行应显示的文件
+    cur_file = {}     # tid -> 当前行应显示的文件（已换成 --tex-dir 前缀）
     cur_meta = {}     # tid -> 当前行槽元数据 {w,h,ox,oy,u,v}（off/uv/逻辑尺寸随装载变）
     loaded = {}       # tid -> 槽是否有内容（Nil=卸载后行显示空白）
+    def take_save(tid, tick):
+        # 消费同 tick 同槽的 save；路径换成 --tex-dir 前缀（vm 落盘在 tex_raw，
+        # 归档在 tex/，trace 里是原始路径，直接用会悬空）。
+        # phantom save 无人消费即无害。
+        key = (tick, tid)
+        if saves.get(key):
+            m = saves[key].pop(0)
+            cur_file[tid] = os.path.join(tex_dir, os.path.basename(m["path"]))
+            cur_meta[tid] = m
+            return True
+        return False
+
     parts_target = {} # parts_id -> graph 槽（PartsAssign）
     pending_text = "" # 最近一句台词，缀到下一个发射的行标签上
     mot = {}          # (pid, kind) -> {s:[src], d:[dst], dur, t0, typ, base:[t0时刻值]}
@@ -338,12 +351,7 @@ def main():
                     if kinds[1] == "str":
                         texmap[str(tid)] = num[1]
                         loaded[tid] = True
-                        key = (tick_at[gseq-1], tid)
-                        if saves.get(key):
-                            m = saves[key].pop(0)
-                            cur_file[tid] = m["path"]
-                            cur_meta[tid] = m
-                        else:
+                        if not take_save(tid, tick_at[gseq-1]):
                             # 有名装载必 dirty 必有 save；没有=模型破了，大声报。
                             no_save_warn += 1
                             if no_save_warn <= 5:
@@ -354,11 +362,7 @@ def main():
             if kinds[0] == "int":
                 tid = int(num[0])
                 if 0 <= tid <= 4095:
-                    key = (tick_at[gseq-1], tid)
-                    if saves.get(key):
-                        m = saves[key].pop(0)
-                        cur_file[tid] = m["path"]
-                        cur_meta[tid] = m
+                    take_save(tid, tick_at[gseq-1])
                     # 无 save = (100,100,100) no-op 或槽空，不换图
         elif name == "PartsAssign":
             if I(0) is not None and I(1) is not None:
@@ -367,11 +371,7 @@ def main():
             if kinds[0] == "int" and kinds[1] == "int" and 0 <= int(num[1]) < 256:
                 tid = parts_target.get(int(num[0]))
                 if tid is not None and 0 <= tid <= 4095:
-                    key = (tick_at[gseq-1], tid)
-                    if saves.get(key):
-                        m = saves[key].pop(0)
-                        cur_file[tid] = m["path"]
-                        cur_meta[tid] = m
+                    take_save(tid, tick_at[gseq-1])
                     # 无 save = 引擎侧落空（parts 未载等），不换图
         elif name in ("PrimSetTile", "PrimSetText", "PrimSetSnow"):
             # 改类型：引擎绘制序 walker 跳过 Tile/Text/Snow 自身（只遍历孩子），
