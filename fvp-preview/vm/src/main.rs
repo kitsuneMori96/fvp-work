@@ -250,10 +250,13 @@ fn main() {
                     match img.save(&path) {
                         Ok(()) => {
                             tex_file.insert(tid as i16, path.clone());
+                            let (dw, dh) = (img.width(), img.height());
                             eprintln!(
-                                "[vm] texsave tick={} tid={} seq={} -> {} ({}x{})",
-                                tick_idx, tid, k, path,
-                                g.get_width(), g.get_height()
+                                "[vm] texsave tick={} tid={} seq={} -> {} (px {}x{}, logical {}x{} off {},{} uv {},{})",
+                                tick_idx, tid, k, path, dw, dh,
+                                g.get_width(), g.get_height(),
+                                g.get_offset_x(), g.get_offset_y(),
+                                g.get_u(), g.get_v()
                             );
                         }
                         Err(e) => {
@@ -484,6 +487,8 @@ fn main() {
             "u": g.get_u(), "v": g.get_v(),
             "off_x": g.get_offset_x() as f32,
             "off_y": g.get_offset_y() as f32,
+            "gw": g.get_width(), "gh": g.get_height(),
+            "w": p.w, "h": p.h,
             "alpha": p.alpha,
             "image": image,
         }));

@@ -117,7 +117,7 @@ let selected=null, hidden=new Set(), solo=null, orig=new Map(), texCache=new Map
 let zoom=1;
 const FIELDS=[["x","px整数"],["y","px整数"],["z","100..10000透视除数"],["angle","十分之一度%3600"],["fx","千分比"],["fy","千分比"],["attr","bit:2=OP,4=透视"],["opx","px(需attr&2)"],["opy","px(需attr&2)"],["alpha","0..255"]];
 function P(p,k,d){ const v=p[k]; return (v===undefined||v===null)?d:v; }
-function params(p){ return {x:P(p,'x',0),y:P(p,'y',0),z:P(p,'z',0),angle:P(p,'angle',0),factor_x:P(p,'fx',1000),factor_y:P(p,'fy',1000),attr:P(p,'attr',0),opx:P(p,'opx',0),opy:P(p,'opy',0),u:P(p,'u',0),v:P(p,'v',0),off_x:P(p,'off_x',0),off_y:P(p,'off_y',0)}; }
+function params(p){ return {x:P(p,'x',0),y:P(p,'y',0),z:P(p,'z',0),angle:P(p,'angle',0),factor_x:P(p,'fx',1000),factor_y:P(p,'fy',1000),attr:P(p,'attr',0),opx:P(p,'opx',0),opy:P(p,'opy',0),u:P(p,'u',0),v:P(p,'v',0),off_x:P(p,'off_x',0),off_y:P(p,'off_y',0),w:P(p,'w',0),h:P(p,'h',0),gw:P(p,'gw',0),gh:P(p,'gh',0)}; }
 // ---------------- 树序（DFS，draw=false 连子树跳过，父 x/y 累加） ----------------
 function drawOrder(prms){
   const idx=new Map(prms.map((p,i)=>[p.id,i])), kids=new Map();
@@ -152,10 +152,26 @@ async function render(){
     const p=scene.prims[i];
     if(!p.image||!visible(p.id)) continue;
     const im=await loadTex(p.image); if(!im) continue;
-    const m=buildModel(params(p),px,py,cam,vp);
+    const q=params(p);
+    // 取图规则对标引擎 draw_sprite_prim：
+    // attr&1 用 prim.w/h（<=0 回退 graph 逻辑尺寸），否则 graph 逻辑尺寸；
+    // u = prim.u - graph.off（含负向裁剪：off 侧补 clip、宽收缩，钳制到解码边）。
+    let dw, dh, su=0, sv=0;
+    if((q.attr&1)!==0){
+      dw=(q.w>0?q.w:(q.gw||im.width)); dh=(q.h>0?q.h:(q.gh||im.height));
+      let u=q.u-q.off_x, v=q.v-q.off_y;
+      if(u<0){q.off_x+=-u;dw+=u;u=0;} if(v<0){q.off_y+=-v;dh+=v;v=0;}
+      dw=Math.min(dw,im.width-u); dh=Math.min(dh,im.height-v);
+      if(dw<=0||dh<=0) continue;
+      su=u; sv=v;
+    } else {
+      dw=(q.gw||im.width); dh=(q.gh||im.height);
+      dw=Math.min(dw,im.width); dh=Math.min(dh,im.height);
+    }
+    const m=buildModel(q,px,py,cam,vp);
     ctx2d.setTransform(m.m11,m.m21,m.m12,m.m22,m.tx,m.ty);
     ctx2d.globalAlpha=(P(p,'alpha',255))/255;
-    ctx2d.drawImage(im,0,0);
+    ctx2d.drawImage(im,su,sv,dw,dh,0,0,dw,dh);
   }
   ctx2d.setTransform(1,0,0,1,0,0); ctx2d.globalAlpha=1;
   // 选中框
@@ -188,7 +204,7 @@ function gotoRow(i){
   if(!replay||!replay.rows.length) return;
   ridx=Math.max(0,Math.min(replay.rows.length-1,i));
   const r=replay.rows[ridx];
-  adopt({viewport:replay.viewport,camera:replay.camera||{x:0,y:0,z:0},prims:r.prims},`脚本行 ${ridx+1}/${replay.rows.length}`);
+  adopt({viewport:replay.viewport,camera:r.camera||replay.camera||{x:0,y:0,z:0},prims:r.prims},`脚本行 ${ridx+1}/${replay.rows.length}`);
   document.getElementById('rSlider').value=ridx;
   document.getElementById('rLabel').textContent=`#${r.seq} ${r.label}`;
   markScriptCursor(true);
