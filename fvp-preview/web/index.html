@@ -141,7 +141,9 @@ function loadTex(path){ if(!path) return Promise.resolve(null);
   const pr=new Promise(res=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null); im.src=texURL(path); });
   texCache.set(path,pr); return pr; }
 // ---------------- 渲染 ----------------
+let renderGen=0; // 代际守卫：切行后旧渲染的异步贴图回來直接丟棄，防串台
 async function render(){
+  const gen=++renderGen;
   if(!scene){ ctx2d.fillStyle='#181818'; ctx2d.fillRect(0,0,cv.width,cv.height); return; }
   const vp=scene.viewport, cam=scene.camera||{x:0,y:0,z:0};
   cv.width=vp.w; cv.height=vp.h;
@@ -152,6 +154,7 @@ async function render(){
     const p=scene.prims[i];
     if(!p.image||!visible(p.id)) continue;
     const im=await loadTex(p.image); if(!im) continue;
+    if(gen!==renderGen) return; // 已被新行取代：丢弃，不画
     const q=params(p);
     // 取图规则对标引擎 draw_sprite_prim：
     // attr&1 用 prim.w/h（<=0 回退 graph 逻辑尺寸），否则 graph 逻辑尺寸；
@@ -178,6 +181,7 @@ async function render(){
   if(selected!==null){
     const o=drawOrder(scene.prims).find(o=>scene.prims[o.i].id===selected);
     if(o){ const p=scene.prims[o.i], im=await loadTex(p.image);
+      if(gen!==renderGen) return;
       if(im){ const m=buildModel(params(p),o.px,o.py,cam,vp);
         const c=[[0,0],[im.naturalWidth,0],[im.naturalWidth,im.naturalHeight],[0,im.naturalHeight]].map(q=>TP(m,q[0],q[1]));
         ctx2d.strokeStyle='yellow'; ctx2d.lineWidth=2; ctx2d.beginPath();
@@ -208,6 +212,12 @@ function gotoRow(i){
   document.getElementById('rSlider').value=ridx;
   document.getElementById('rLabel').textContent=`#${r.seq} ${r.label}`;
   markScriptCursor(true);
+  // tick边界提示：同tick多行只有末行=游戏实际呈现帧，其余是脚本执行中间态
+  const nxt=replay.rows[ridx+1];
+  if(r.tick!==undefined){
+    const mid=nxt&&nxt.tick===r.tick;
+    document.getElementById('status').textContent+=mid?` · tick ${r.tick} 中间态（末行才=游戏帧）`:` · tick ${r.tick} 游戏帧`;
+  }
 }
 // ---------------- 脚本 surviving（行=回放行，光标移到哪预览到哪） ----------------
 function scriptFilter(){ return document.getElementById('rFilter').value.trim(); }
