@@ -9,9 +9,11 @@ set -e
 HCB="${1:?用法: sample_sakura.sh <game.hcb> [SAMPLE_DIR] [TICKS]}"
 SAMPLE_DIR="${2:-/tmp/fvp-sample-sakura}"
 TICKS="${3:-2000}"
-# 开场实录：ENTRY_PC=剧本函数（如 665985 游戏开场），AUTO_CLICK=自动过 click-to-continue。
+# 开场实录：ENTRY_PC=剧本函数（如 665985 游戏开场），AUTO_CLICK=自动过 click-to-continue，
+# PRESET_GLOBALS="idx val ..."=冷启动补 boot 全局量（如 "1950 0" 开 CG 变体门）。
 ENTRY_PC="${ENTRY_PC:-}"
 AUTO_CLICK="${AUTO_CLICK:-}"
+PRESET_GLOBALS="${PRESET_GLOBALS:-}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 DISASM="${DISASM:-$HOME/rfvp-upstream/target/debug/disassembler}"
 VM="$HOME/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"
@@ -29,6 +31,15 @@ rm -rf "$SAMPLE_DIR/tex_raw"
 EXTRA=()
 [ -n "$ENTRY_PC" ] && EXTRA+=(--entry-pc "$ENTRY_PC")
 [ -n "$AUTO_CLICK" ] && EXTRA+=(--auto-click "$AUTO_CLICK")
+if [ -n "$PRESET_GLOBALS" ]; then
+  # shellcheck disable=SC2206
+  _pg=($PRESET_GLOBALS)
+  i=0
+  while [ $i -lt ${#_pg[@]} ]; do
+    EXTRA+=(--set-global "${_pg[$i]}" "${_pg[$((i+1))]}")
+    i=$((i+2))
+  done
+fi
 "$VM" "$HCB" --ticks "$TICKS" "${EXTRA[@]}" --png-dir "$SAMPLE_DIR/tex_raw" \
   --trace-syscall > "$SAMPLE_DIR/scene.json" 2> "$SAMPLE_DIR/trace.log"
 echo "== 3/5 贴图归档（绝对路径改写，/tmp 易失）=="

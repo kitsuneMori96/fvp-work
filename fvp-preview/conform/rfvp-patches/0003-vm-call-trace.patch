@@ -1,0 +1,15 @@
+diff --git a/crates/rfvp/src/script/context.rs b/crates/rfvp/src/script/context.rs
+--- a/crates/rfvp/src/script/context.rs
++++ b/crates/rfvp/src/script/context.rs
+@@ -365,6 +365,11 @@ impl Context {
+         }
+
+         // log::info!("call: {:x}", addr);
++        // FVP-PREVIEW scratch: call trace (RFVP_CALL_TRACE=1), for locating
++        // script paths. Not for upstream.
++        if std::env::var("RFVP_CALL_TRACE").is_ok() {
++            log::info!("calltrace: from={} to={}", self.cursor, addr);
++        }
+
+         let frame = Variant::SavedStackInfo(super::SavedStackInfo {
+             stack_base: self.cur_stack_base,
