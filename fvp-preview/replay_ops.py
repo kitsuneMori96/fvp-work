@@ -383,15 +383,21 @@ def main():
                               "PrimSetSnow": "Snow"}[name]
                 _p["attr"] |= 0x40
         elif name == "MotionAlpha":
-            # (id,src,dst,dur,type)：0..255 守卫 + Nil 回退当前值；dur 非法扔掉；
+            # (id,src,dst,dur,type)：0..255 守卫；dur 非法扔掉；
             # typ 缺省/非法一律线性（上游 _ => Linear），只有显式 1 才是立即型。
+            # Nil 回退：src -> 调用时刻当前值；dst -> 255（不透明）。
+            #   证据：tachie 分镜四次同构 setup（Sprt/GroupIn/OP/XY/Alpha0/淡入），
+            #   显式 dst=255 的淡入正常显示（3824行16→3850行255），三次 dst=Nil
+            #   全灭；原版游戏截图证 Nil 那次可见。上游 motion_alpha 的 Nil->当前值
+            #   在此与原版相悖（conform/0004 同步修正引擎侧）。
             _pid = I(0)
             if _pid is not None and 1 <= _pid <= 4095:
                 _now = tick_at[gseq - 1]
                 _base = cur_vals(_pid, "alpha", _now)
                 mot_settle(_pid, "alpha", _now)
                 _src = I(1) if I(1) is not None and 0 <= I(1) <= 255 else _base[0]
-                _dst = I(2) if I(2) is not None and 0 <= I(2) <= 255 else _base[0]
+                _dst = I(2) if I(2) is not None and 0 <= I(2) <= 255 else (
+                    255 if len(kinds) > 2 and kinds[2] == "nil" else _base[0])
                 _dur = I(3)
                 _typ = I(4) if I(4) == 1 else 0
                 _typ = "imm" if _typ == 1 else 0

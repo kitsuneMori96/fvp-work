@@ -1,0 +1,16 @@
+diff --git a/crates/rfvp/src/subsystem/components/syscalls/motion.rs b/crates/rfvp/src/subsystem/components/syscalls/motion.rs
+index 278d401..2b92cb3 100644
+--- a/crates/rfvp/src/subsystem/components/syscalls/motion.rs
++++ b/crates/rfvp/src/subsystem/components/syscalls/motion.rs
+@@ -67,6 +67,11 @@ pub fn motion_alpha(
+ 
+     let dst_alpha = match dst_alpha {
+         Variant::Int(dst_alpha) if (0..=255).contains(dst_alpha) => *dst_alpha as u8,
++        // FVP-PREVIEW scratch: Nil dst = 不透明（原版语义）。证据见 fvp-work：
++        // tachie 分镜交替用显式 255 与 Nil 写同一种淡入（Sprt/GroupIn/OP/XY/
++        // Alpha0/淡入），Nil 若回退当前值（此时恒为刚设的 0）则淡入恒死，
++        // 与原版实机画面矛盾。src 保持 Nil->当前值。
++        Variant::Nil => 255,
+         _ => current_alpha,
+     };
+ 
