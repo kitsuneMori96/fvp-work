@@ -237,23 +237,44 @@ def main():
         return out
 
     def do_init(pid, typ, tick):
-        # prim_init_with_type: 置类型 + draw=true + Group 清 x/y，全程加脏位 0x40。
+        # prim_init_with_type 条件语义（引擎 prim.rs:352）：只在类型变化时重置
+        # （置类型 + draw=true + Group 清 x/y + 离开 Group 时解散孩子链）；
+        # 同类型重入只挂脏位 0x40。旧模型无条件重置，会把 Draw 关掉的组刷成可见
+        # （Simple 选项菜单组 328 案：GroupIn[324,328] 在 Draw-off 之后）。
         # motion 记录：completed 的过期（引擎停写），运行中的继续（容器独立）。
         p = P(pid)
-        p["type"] = typ
-        p["draw"] = True
-        if typ == "Group":
-            p["x"] = p["y"] = 0
+        if p["type"] != typ:
+            if p["type"] == "Group":
+                for q in prims.values():
+                    if q.get("parent") == pid:
+                        q["parent"] = None
+            p["type"] = typ
+            p["draw"] = True
+            if typ == "Group":
+                p["x"] = p["y"] = 0
         p["attr"] |= 0x40
         mot_kill_completed(pid, tick)
 
+    def eff_draw(pid):
+        # 引擎 render_tree 语义：子树根 draw=false 则整棵不画。沿 parent 链上溯，
+        # 自己或任一祖先 draw=false 即不可见（含组关但自开的情况）。
+        seen = set()
+        cur = pid
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            q = prims.get(cur)
+            if q is None or not q["draw"]:
+                return False
+            cur = q["parent"]
+        return True
+
     def snapshot(tick_now, legacy_tex):
-        # 只收 draw=true 且 alpha!=0 的 Sprt（引擎两者都不画）+ 全部 Group；
+        # 只收有效可见（own draw + 祖先链全开）且 alpha!=0 的 Sprt + 全部 Group；
         # motion 记录逐行精确插值（linear 家族+easing，16ms/tick），无 approx。
         lst = []
         for pid in sorted(prims):
             p = prims[pid]
-            if p["type"] == "Sprt" and p["draw"]:
+            if p["type"] == "Sprt" and p["draw"] and eff_draw(pid):
                 vals = {"x": p["x"], "y": p["y"], "z": p["z"],
                         "angle": p["angle"], "fx": p["fx"], "fy": p["fy"],
                         "alpha": p["alpha"]}

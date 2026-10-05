@@ -39,6 +39,7 @@ fn main() {
     let mut auto_click: Option<usize> = None;
     let mut break_pc: Option<usize> = None;
     let mut png_dir = "/tmp/vmtex".to_string();
+    let mut nls = Nls::ShiftJIS;
     let mut ref_png: Option<String> = None;
     let mut dump_tree = false;
     let mut trace_syscall = false;
@@ -84,6 +85,19 @@ fn main() {
             }
             "--png-dir" => {
                 png_dir = args[i + 1].clone();
+                i += 2;
+            }
+            "--nls" => {
+                // 字符串解码：sjis（默认，真机日文）| gbk（汉化剧本，如 Simple 编辑器产物）| utf8。
+                nls = match args[i + 1].as_str() {
+                    "gbk" => Nls::GBK,
+                    "utf8" => Nls::UTF8,
+                    "sjis" | "shift_jis" => Nls::ShiftJIS,
+                    other => {
+                        eprintln!("未知 --nls: {}（用 sjis|gbk|utf8）", other);
+                        std::process::exit(2);
+                    }
+                };
                 i += 2;
             }
             "--ref-png" => {
@@ -138,7 +152,7 @@ fn main() {
     log::info!("[vm] 启动");
 
     let bytes = std::fs::read(&hcb_path).expect("读 HCB");
-    let mut parser = Parser::from_bytes(bytes, Nls::ShiftJIS).expect("解析 HCB");
+    let mut parser = Parser::from_bytes(bytes, nls).expect("解析 HCB");
     let entry: u32 = entry_override
         .map(|v| v as u32)
         .unwrap_or_else(|| parser.get_entry_point());
