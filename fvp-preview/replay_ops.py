@@ -467,7 +467,11 @@ def main():
                 _dur = I(3)
                 _typ = I(4) if I(4) == 1 else 0
                 _typ = "imm" if _typ == 1 else 0
-                if _dur is not None and 1 <= _dur <= 300000:
+                if _dur is None and _pid is not None and 1 <= _pid <= 4095:
+                    # 0008 同步：dur Nil = 立即完成（置 dst，不建记录）。
+                    # 旧模型按非法扔掉，淡入恒死（prim104）。
+                    P(_pid)["alpha"] = _dst
+                elif _dur is not None and 1 <= _dur <= 300000:
                     mot[(_pid, "alpha")] = {"s": [_src], "d": [_dst],
                                             "dur": _dur, "t0": _now,
                                             "typ": _typ, "base": _base}

@@ -1,0 +1,25 @@
+diff --git a/crates/rfvp/src/subsystem/components/syscalls/motion.rs b/crates/rfvp/src/subsystem/components/syscalls/motion.rs
+index 2b92cb3..a5228a7 100644
+--- a/crates/rfvp/src/subsystem/components/syscalls/motion.rs
++++ b/crates/rfvp/src/subsystem/components/syscalls/motion.rs
+@@ -78,7 +78,20 @@ pub fn motion_alpha(
+     let duration = match duration {
+         Variant::Int(duration) => *duration,
++        // fvp-preview 0008: 时长 Nil = 立即完成（置 dst，不建 motion 记录）。
++        // 实机证据：Simple-bs 初显路径 duration 取未初始化全局（Nil，如 prim104
++        // MotionAlpha(104,0,Nil,Nil)），真机立绘正常淡入/出现；no-op 会让淡入恒死。
++        // updater 本身 elapsed>=duration 即置 dst，Nil 按 duration→0 的极限处理。
++        // test 侧无记录即完成（test_alpha_motion 查不到记录即 true），忙等待不 hang。
++        Variant::Nil => {
++            game_data
++                .motion_manager
++                .prim_manager
++                .get_prim(id)
++                .set_alpha(dst_alpha);
++            return Ok(Variant::Nil);
++        }
+         _ => {
+             log::error!("Invalid duration");
+             return Ok(Variant::Nil);
+         }
+     };
