@@ -13,6 +13,8 @@ if [ ! -f "$SAMPLE_DIR/scene.json" ]; then
   echo "  bash $REPO/sample_tachie.sh $SAMPLE_DIR"
   exit 1
 fi
+# 预览不需要音频：跳过 voice/bgm/se 包的扫表（0007；9P 上全量扫表要 6s）。
+export FVP_VFS_SKIP="${FVP_VFS_SKIP:-voice,bgm,se,se_sys,se_env}"
 if pgrep -f "serve_editor.py.*$PORT" >/dev/null 2>&1; then
   echo "服务已在跑（端口 $PORT），不重复启动。"
 else

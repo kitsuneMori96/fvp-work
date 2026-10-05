@@ -327,6 +327,17 @@ class H(BaseHTTPRequestHandler):
             return jsend(self, out)
         if u.path == "/api/tex":
             p = (q.get("path") or [""])[0]
+            # replay 里是相对 sample_dir 的路径（tex/xxx.png）；相对路径一律
+            # 以 sample_dir 为根解析（以前直接 isfile，cwd 不对就全 404）。
+            if p and not os.path.isabs(p):
+                p = os.path.join(ARGS.sample_dir, p)
+            p = os.path.normpath(p)
+            # 允许 sample_dir 本体 + 即时预览用的 <sample>.instant 兄弟目录
+            #（instant 快照里是 --png-dir 落盘的绝对路径）。
+            roots = [os.path.normpath(ARGS.sample_dir),
+                     os.path.normpath(ARGS.sample_dir.rstrip("/") + ".instant")]
+            if not any(p == r or p.startswith(r + os.sep) for r in roots):
+                return jsend(self, {"ok": False, "error": "非法路径"}, 404)
             if not p or not os.path.isfile(p):
                 # 不用 send_error(中文)：BaseHTTPRequestHandler 按 latin-1 编码
                 # message，中文直接炸 handler 线程。

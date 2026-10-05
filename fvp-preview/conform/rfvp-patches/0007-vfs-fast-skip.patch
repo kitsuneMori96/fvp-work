@@ -1,0 +1,57 @@
+diff --git a/crates/rfvp/src/subsystem/resources/vfs.rs b/crates/rfvp/src/subsystem/resources/vfs.rs
+index cc6b53c..3864b60 100644
+--- a/crates/rfvp/src/subsystem/resources/vfs.rs
++++ b/crates/rfvp/src/subsystem/resources/vfs.rs
+@@ -467,15 +467,18 @@ impl VfsFile {
+             Self::read_filename_table(reader, filename_table_offset, filename_table_size, nls)?;
+ 
+         reader.seek(SeekFrom::Start(entries_offset))?;
++        // fvp-preview 0007b: entries 区一次读完。逐 u32 seek+read 在 9P 上会被
++        // RTT 放大（voice 包 file_count 万级 → 几十万次小读 ≈ 数秒）。
++        let mut ebuf = vec![0u8; (file_count * 12) as usize];
++        reader.read_exact(&mut ebuf)?;
+         let mut entries = StableHashMap::default();
+-        let mut cur = entries_offset;
+-        for _ in 0..file_count {
+-            let name_off = Self::read_u32le(reader, cur)? as u64;
+-            cur += 4;
+-            let data_off = Self::read_u32le(reader, cur)? as u64;
+-            cur += 4;
+-            let data_size = Self::read_u32le(reader, cur)? as u64;
+-            cur += 4;
++        for chunk in ebuf.chunks_exact(12) {
++            let name_off =
++                u32::from_le_bytes(chunk[0..4].try_into().unwrap()) as u64;
++            let data_off =
++                u32::from_le_bytes(chunk[4..8].try_into().unwrap()) as u64;
++            let data_size =
++                u32::from_le_bytes(chunk[8..12].try_into().unwrap()) as u64;
+ 
+             if let Some(name) = filename_table.get(&name_off) {
+                 entries.insert(
+@@ -657,6 +660,15 @@ impl Vfs {
+     pub fn new(nls: Nls) -> Result<Vfs> {
+         let base_path = app_base_path();
+         let mut files = StableHashMap::default();
++        // fvp-preview 0007: 预览不需要音频包；moyu 全 .bin 扫文件名表在 9P 上要 ~6s。
++        // FVP_VFS_SKIP=voice,bgm,se,se_sys,se_env（逗号分隔，小写）跳过整个包。
++        // 注意：被跳过的包在游戏里被访问到会按缺包处理，仅预览链路使用。
++        let skip: Vec<String> = std::env::var("FVP_VFS_SKIP")
++            .unwrap_or_default()
++            .split(',')
++            .map(|s| s.trim().to_ascii_lowercase())
++            .filter(|s| !s.is_empty())
++            .collect();
+ 
+         for entry in fs::read_dir(base_path.get_path())? {
+             let Ok(entry) = entry else {
+@@ -681,6 +693,9 @@ impl Vfs {
+             }
+ 
+             let folder_name = folder_name.to_string();
++            if skip.iter().any(|s| *s == folder_name.to_ascii_lowercase()) {
++                continue;
++            }
+             if let Ok(vf) = VfsFile::new(path, folder_name.to_ascii_lowercase().clone(), nls) {
+                 files.insert(folder_name.to_ascii_lowercase(), vf);
+             }
