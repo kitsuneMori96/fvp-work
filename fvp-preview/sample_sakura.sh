@@ -10,7 +10,11 @@ HCB="${1:?用法: sample_sakura.sh <game.hcb> [SAMPLE_DIR] [TICKS]}"
 SAMPLE_DIR="${2:-/tmp/fvp-sample-sakura}"
 TICKS="${3:-2000}"
 # 开场实录：ENTRY_PC=剧本函数（如 665985 游戏开场），AUTO_CLICK=自动过 click-to-continue，
-# PRESET_GLOBALS="idx val ..."=冷启动补 boot 全局量（如 "1950 0" 开 CG 变体门）。
+# PRESET_GLOBALS="idx val ..."=冷启动补 boot 全局量。已知必备（2026-10-05）：
+#   "1950 0"      开 CG 变体门（真 boot 值 1/2/3 走分支，0=全开；Nil 则 CG 全灭）
+#   "1973 true"   开背景模糊双层（真 boot 经 582636 传 True->G1344->583164 拷到 G1973；
+#                 场景可经 236677(mode6) 改写）。缺省则 187/b层永不装载、338050 永不进。
+# 注意值类型：true/nil 走字面，数字走 Int（门条件 ==True 与 Int(1) 不等！）。
 ENTRY_PC="${ENTRY_PC:-}"
 AUTO_CLICK="${AUTO_CLICK:-}"
 PRESET_GLOBALS="${PRESET_GLOBALS:-}"
