@@ -80,7 +80,14 @@ def build_simple(simple_dir, script_txt):
         raise RuntimeError(("BUILD_FAIL_TXT_LINE=%d\n" % line if line else "")
                            + "\n".join(tail))
     lm = json.load(open(lmp, encoding="utf-8"))
-    entry = _derive_entry(os.path.join(simple_dir, "base", "base.chb"), chb)
+    # linemap 自带 new_off（编译器直写）；diff 反推只当后备（new_off==base_off
+    # 时 oribytes 无 patch，diff 无候选，如全预注册 CG 的剧本）。
+    try:
+        entry = int(lm.get("new_off", 0)) or None
+    except Exception:
+        entry = None
+    if not entry:
+        entry = _derive_entry(os.path.join(simple_dir, "base", "base.chb"), chb)
     INSTANT["text_hash"] = digest
     INSTANT["entry"] = entry
     INSTANT["linemap"] = lm
