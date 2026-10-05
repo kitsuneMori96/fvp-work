@@ -20,11 +20,15 @@ VM="$HOME/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"
 
 echo "== 1/6 hcb_build 拼字节码 =="
 cd "$SIMPLE_DIR"
-mkdir -p base
+mkdir -p base "$SAMPLE_DIR"
+BUILD_LOG="$SAMPLE_DIR/build.log"
 [ -f base/base.chb ] || cp base.chb base/base.chb
 [ -f base/cg_loaded.txt ] || cp cg_loaded.txt base/cg_loaded.txt
 cp "$SCRIPT_TXT" base/Script.txt
-python3 hcb_build.py > /tmp/simple-build.log 2>&1 || { tail -5 /tmp/simple-build.log; exit 1; }
+python3 hcb_build.py > "$BUILD_LOG" 2>&1 || {
+  # P2: 构建报错定位到 txt 行：hcb_build 逐行 print(i)，取最后一个纯数字+1。
+  echo "BUILD_FAIL_TXT_LINE=$(grep -E '^[0-9]+$' "$BUILD_LOG" | tail -1 | awk '{print $1+1}')"
+  tail -8 "$BUILD_LOG"; exit 1; }
 CHB="$SIMPLE_DIR/.test.chb"
 [ -f "$CHB" ] || { echo "构建产物缺失"; tail -5 /tmp/simple-build.log; exit 1; }
 echo "产物: $CHB $(stat -c%s "$CHB")B"
@@ -61,7 +65,9 @@ fi
 echo "剧本入口: $ENTRY_PC"
 
 echo "== 3/6 vm 实录 $TICKS ticks（gbk 台词）=="
-rm -rf "$SAMPLE_DIR" && mkdir -p "$SAMPLE_DIR/tex_raw"
+# 保留 build.log（步骤1已写），其余清掉重建（防旧 tex/replay 残留）。
+find "$SAMPLE_DIR" -mindepth 1 -maxdepth 1 ! -name build.log -exec rm -rf {} +
+mkdir -p "$SAMPLE_DIR/tex_raw"
 # RFVP_CALL_TRACE=1: 记录 script 层 call(from->to)，给 replay 做 txt 行号归因（P1）。
 export RFVP_CALL_TRACE=1
 "$VM" "$CHB" --ticks "$TICKS" --entry-pc "$ENTRY_PC" --auto-click "$AUTO_CLICK" \
@@ -91,4 +97,8 @@ python3 "$REPO/replay_ops.py" "$SAMPLE_DIR/trace.log" --tex-dir "$SAMPLE_DIR/tex
   --linemap "$SAMPLE_DIR/linemap.json"
 
 echo "== 6/6 起预览服务 =="
-bash "$REPO/start_editor.sh" "$SAMPLE_DIR" "$PORT"
+if [ -n "$SKIP_SERVE" ]; then
+  echo "(SKIP_SERVE=1，跳过起服务)"
+else
+  bash "$REPO/start_editor.sh" "$SAMPLE_DIR" "$PORT"
+fi

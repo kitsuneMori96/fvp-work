@@ -12,7 +12,10 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -20,6 +23,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
 REPO = HERE
 ARGS = None
+
+# P2: rebuild 后台任务表 {job: {state, log, t0}}
+JOBS = {}
+JOBS_LOCK = threading.Lock()
+JOB_SEQ = [0]
 
 
 def jsend(h, obj, code=200):
@@ -29,6 +37,69 @@ def jsend(h, obj, code=200):
     h.send_header("Content-Length", str(len(body)))
     h.end_headers()
     h.wfile.write(body)
+
+
+def script_path():
+    if ARGS.script:
+        return ARGS.script
+    if ARGS.simple_dir:
+        return os.path.join(ARGS.simple_dir, "base", "Script.txt")
+    return ""
+
+
+def run_rebuild(job, simple_dir, script_txt, sample_dir, ticks, port):
+    """P2: 后台跑 preview_simple.sh（SKIP_SERVE=1）到 sample.next，成功则换位。"""
+    def log(s):
+        with JOBS_LOCK:
+            JOBS[job]["log"] += s + "\n"
+    try:
+        nxt = sample_dir.rstrip("/") + ".next"
+        if os.path.isdir(nxt):
+            shutil.rmtree(nxt)
+        env = dict(os.environ)
+        env["SKIP_SERVE"] = "1"
+        env["TICKS"] = str(ticks)
+        cmd = ["bash", os.path.join(REPO, "preview_simple.sh"),
+               simple_dir, script_txt, nxt, str(port)]
+        log("$ " + " ".join(cmd))
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, bufsize=1, env=env, cwd=simple_dir)
+        for line in p.stdout:
+            with JOBS_LOCK:
+                JOBS[job]["log"] += line
+        rc = p.wait()
+        if rc != 0:
+            tail = JOBS[job]["log"][-2000:]
+            with JOBS_LOCK:
+                JOBS[job]["state"] = "error"
+                JOBS[job]["error"] = f"管线退出码 {rc}\n" + tail
+            return
+        # 换位：next -> sample（旧的挪 .bak，读一半的 torn JSON 不会暴露太久；
+        # 前端在 state=done 后才重拉）。
+        bak = sample_dir.rstrip("/") + ".bak"
+        if os.path.isdir(bak):
+            shutil.rmtree(bak)
+        if os.path.isdir(sample_dir):
+            os.rename(sample_dir, bak)
+        os.rename(nxt, sample_dir)
+        rows, diffs = None, None
+        try:
+            rj = json.load(open(os.path.join(sample_dir, "replay.json"), encoding="utf-8"))
+            rows = len(rj.get("rows", []))
+        except Exception:
+            pass
+        for line in JOBS[job]["log"].splitlines()[::-1]:
+            if "diffs=" in line:
+                diffs = line.strip()
+                break
+        with JOBS_LOCK:
+            JOBS[job]["state"] = "done"
+            JOBS[job]["rows"] = rows
+            JOBS[job]["diffs"] = diffs
+    except Exception as e:
+        with JOBS_LOCK:
+            JOBS[job]["state"] = "error"
+            JOBS[job]["error"] = f"任务异常: {e}"
 
 
 class H(BaseHTTPRequestHandler):
@@ -61,7 +132,32 @@ class H(BaseHTTPRequestHandler):
             ap = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
             return self._file(ap, "application/json")
         if u.path == "/api/paths":
-            return jsend(self, {"hcb": ARGS.hcb or "", "sample_dir": ARGS.sample_dir})
+            return jsend(self, {"hcb": ARGS.hcb or "", "sample_dir": ARGS.sample_dir,
+                                "simple_dir": ARGS.simple_dir or "",
+                                "script": script_path()})
+        if u.path == "/api/script":
+            # P2: 读剧本 txt（磁盘 GBK → JSON UTF-8）。
+            sp = script_path()
+            if not sp or not os.path.isfile(sp):
+                return jsend(self, {"ok": False, "error": "服务端未配 --script"})
+            try:
+                with open(sp, "rb") as f:
+                    text = f.read().decode("gbk")
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"读剧本失败: {e}"})
+            return jsend(self, {"ok": True, "path": sp, "text": text})
+        if u.path == "/api/rebuild":
+            job = (q.get("job") or [""])[0]
+            with JOBS_LOCK:
+                j = JOBS.get(job)
+                if not j:
+                    return jsend(self, {"ok": False, "error": "任务不存在"})
+                out = {"ok": True, "state": j["state"], "log": j["log"][-3000:]}
+                if j["state"] == "done":
+                    out.update({"rows": j.get("rows"), "diffs": j.get("diffs")})
+                if j["state"] == "error":
+                    out.update({"error": j.get("error")})
+            return jsend(self, out)
         if u.path == "/api/tex":
             p = (q.get("path") or [""])[0]
             if not p or not os.path.isfile(p):
@@ -74,6 +170,38 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/rebuild":
+            # P2: 存剧本 → 后台重跑管线。{text, ticks?} → {ok, job}。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
+            text = req.get("text")
+            if text is None:
+                return jsend(self, {"ok": False, "error": "缺 text"})
+            sp = script_path()
+            sd = ARGS.simple_dir
+            if not sp or not sd or not os.path.isdir(sd):
+                return jsend(self, {"ok": False, "error": "服务端未配 --simple-dir/--script"})
+            try:
+                ticks = int(req.get("ticks") or 1500)
+            except Exception:
+                ticks = 1500
+            try:
+                with open(sp, "wb") as f:
+                    f.write(text.encode("gbk"))
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"写剧本失败: {e}"})
+            with JOBS_LOCK:
+                JOB_SEQ[0] += 1
+                job = f"r{JOB_SEQ[0]}"
+                JOBS[job] = {"state": "running", "log": "", "t0": time.time()}
+            t = threading.Thread(target=run_rebuild,
+                                 args=(job, sd, sp, ARGS.sample_dir, ticks, ARGS.port),
+                                 daemon=True)
+            t.start()
+            return jsend(self, {"ok": True, "job": job})
         if u.path != "/api/writeback":
             return self.send_error(404)
         try:
@@ -115,6 +243,10 @@ def main():
     ap.add_argument("--addrmap", default="")
     ap.add_argument("--out-hcb", default="")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--simple-dir", default="",
+                    help="P2: Simple 仓库目录（开剧本编辑+重跑需配）")
+    ap.add_argument("--script", default="",
+                    help="P2: 剧本 txt 路径（磁盘 GBK；默认 <simple-dir>/base/Script.txt）")
     ap.add_argument("--host", default="0.0.0.0",
                     help="监听地址（WSL2 下 Windows 浏览器需 0.0.0.0，用 WSL IP 访问）")
     ARGS = ap.parse_args()

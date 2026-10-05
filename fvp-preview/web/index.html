@@ -40,6 +40,10 @@
   <div class="row"><small>过滤 <input type="text" id="rFilter" size="18" placeholder="如 258 / PrimSetXY"></small></div>
   <div id="scriptList" tabindex="0" style="max-height:260px;overflow-y:auto;border:1px solid #333;font-family:monospace;font-size:12px;"></div>
   <div class="row"><small>点行/↑↓光标即预览到该处； slider 同步</small></div>
+  <h3>剧本txt <span id="txtPath"></span></h3>
+  <div><textarea id="txtEd" spellcheck="false" style="width:100%;height:220px;background:#1a1a1a;color:#ddd;border:1px solid #333;font-family:monospace;font-size:12px;white-space:pre;" placeholder="服务端配 --simple-dir 后在此直接写剧本"></textarea></div>
+  <div class="row"><button id="btnRebuild">保存并重跑</button><small id="txtStatus">未连接剧本</small></div>
+  <div class="row"><small>光标停哪行→画面跟到该行执行后；改完停2秒自动重跑（分钟级）</small></div>
   <div class="row"><button id="btnExport">导出PNG系列</button><small id="expStatus"></small></div>
   <h3>图层（顶→底）</h3>
   <div id="layers"></div>
@@ -212,6 +216,8 @@ function gotoRow(i){
   document.getElementById('rSlider').value=ridx;
   document.getElementById('rLabel').textContent=`#${r.seq} ${r.label}`;
   markScriptCursor(true);
+  // P2 反向同步：回放行 → txt 光标（不抢焦点，只挪光标）
+  syncTxtCursor(r);
   // tick边界提示：同tick多行只有末行=游戏实际呈现帧，其余是脚本执行中间态
   const nxt=replay.rows[ridx+1];
   if(r.tick!==undefined){
@@ -316,7 +322,7 @@ window.addEventListener('mouseup',()=>dragging=false);
 function readJSON(file){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>{try{res(JSON.parse(r.result))}catch(e){res(null)}}; r.readAsText(file); }); }
 document.getElementById('fScene').onchange=async e=>{ const s=await readJSON(e.target.files[0]); if(s&&s.prims)adopt(s,'已加载'); };
 document.getElementById('fReplay').onchange=async e=>{ const r=await readJSON(e.target.files[0]);
-  if(r&&r.rows){ replay=r; ridx=0;
+  if(r&&r.rows){ replay=r;ridx=0;buildLineMap();
     document.getElementById('rSlider').max=r.rows.length-1;
     document.getElementById('rCount').textContent=`${r.rows.length}行`; renderScriptList(); gotoRow(0); } };
 document.getElementById('rFilter').oninput=()=>renderScriptList();
@@ -336,14 +342,97 @@ document.getElementById('rNext').onclick=()=>gotoRow(ridx+1);
 document.getElementById('rSlider').oninput=e=>gotoRow(parseInt(e.target.value,10));
 document.getElementById('btnClearHide').onclick=()=>{hidden.clear();solo=null;render();renderLayers();};
 window.addEventListener('resize',()=>{ if(scene) fitZoom(); });
+// ---------------- P2 剧本txt编辑+光标预览 ----------------
+let txtTimer=null, txtPoll=null, rebuilding=false, suppressTxtSync=false, lineRowMap=new Map();
+function buildLineMap(){
+  lineRowMap=new Map();
+  if(!replay||!replay.rows) return;
+  replay.rows.forEach((r,i)=>{ if(r.line!=null) lineRowMap.set(r.line,i); }); // 同行多次执行取末次
+}
+function mapLineToRow(L){
+  for(let l=L;l>=1;l--) if(lineRowMap.has(l)) return lineRowMap.get(l);
+  return replay&&replay.rows.length?0:-1;
+}
+function curTxtLine(){
+  const t=document.getElementById('txtEd');
+  return t.value.slice(0,t.selectionStart).split('\n').length;
+}
+function setTxtLine(L){
+  const t=document.getElementById('txtEd');
+  const lines=t.value.split('\n');
+  if(L<1||L>lines.length) return;
+  let pos=0; for(let k=0;k<L-1;k++) pos+=lines[k].length+1;
+  suppressTxtSync=true;
+  t.setSelectionRange(pos,pos);
+  suppressTxtSync=false;
+}
+function syncTxtCursor(r){
+  if(suppressTxtSync||!r||r.line==null) return;
+  const cur=curTxtLine();
+  if(cur!==r.line){ setTxtLine(r.line);
+    document.getElementById('txtStatus').textContent=`#${r.seq} ← txt行${r.line}`; }
+}
+function followTxtCursor(){
+  if(rebuilding||suppressTxtSync) return;
+  const L=curTxtLine(), i=mapLineToRow(L);
+  if(i>=0&&i!==ridx){ gotoRow(i);
+    document.getElementById('txtStatus').textContent=`txt行${L} → #${replay.rows[i].seq}`; }
+}
+async function loadTxt(){
+  try{ const r=await api('/api/script');
+    if(r&&r.ok){ document.getElementById('txtEd').value=r.text;
+      document.getElementById('txtPath').textContent=r.path;
+      document.getElementById('txtStatus').textContent='已载入，光标跟随中';
+    } else document.getElementById('txtStatus').textContent='无剧本（服务端配--simple-dir）';
+  }catch(e){ document.getElementById('txtStatus').textContent='服务端未连接'; }
+}
+async function pollRebuild(job){
+  const st=document.getElementById('txtStatus');
+  txtPoll=setInterval(async ()=>{
+    try{ const r=await api('/api/rebuild?job='+encodeURIComponent(job));
+      if(r.state==='running'){ const tail=(r.log||'').split('\n').slice(-3).join(' / ');
+        st.textContent=`重跑中… ${tail.slice(-90)}`; return; }
+      clearInterval(txtPoll); txtPoll=null; rebuilding=false;
+      if(r.state==='done'){
+        const [s,rp]=await Promise.all([api('/api/scene'),api('/api/replay')]);
+        if(s&&s.prims)adopt(s,'重跑完成');
+        if(rp&&rp.rows){replay=rp;buildLineMap();
+          document.getElementById('rSlider').max=rp.rows.length-1;
+          document.getElementById('rCount').textContent=`${rp.rows.length}行`;
+          renderScriptList();}
+        followTxtCursor();
+        st.textContent=`重跑完成 ${r.rows||'?'}行 ${r.diffs||''}`;
+      } else {
+        // 报错定位：BUILD_FAIL_TXT_LINE=N（桥脚本从 hcb_build 日志提取），
+        // 回退：日志尾最后一个纯数字行+1。
+        const mm=/BUILD_FAIL_TXT_LINE=(\d+)/.exec(r.error||'');
+        const nums=mm?[parseInt(mm[1],10)]:[...(r.error||'').matchAll(/^(\d+)\s*$/gm)].map(m=>parseInt(m[1],10)+1);
+        if(nums.length){ setTxtLine(nums[nums.length-1]);
+          st.textContent=`构建失败 @txt行${nums[nums.length-1]}（见日志尾）`; }
+        else st.textContent='重跑失败：'+((r.error||'').split('\n').slice(-2).join(' / ').slice(-120));
+      }
+    }catch(e){ clearInterval(txtPoll); txtPoll=null; rebuilding=false; st.textContent='轮询失败：'+e; }
+  },2000);
+}
+async function startRebuild(){
+  if(rebuilding) return;
+  rebuilding=true;
+  document.getElementById('txtStatus').textContent='保存剧本，启动重跑…';
+  try{ const r=await api('/api/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:document.getElementById('txtEd').value})});
+    if(r&&r.ok&&r.job) pollRebuild(r.job);
+    else { rebuilding=false; document.getElementById('txtStatus').textContent='启动失败：'+(r&&r.error||''); }
+  }catch(e){ rebuilding=false; document.getElementById('txtStatus').textContent='服务端错误：'+e; }
+}
 // ---------------- 服务端联动 ----------------
 async function api(path,opts){ const r=await fetch(path,opts); return r.json(); }
 document.getElementById('btnSample').onclick=async ()=>{
   try{ const [s,r,m]=await Promise.all([api('/api/scene'),api('/api/replay'),api('/api/addrmap').catch(()=>null)]);
     if(s&&s.prims)adopt(s,'示例工程');
-    if(r&&r.rows){replay=r;ridx=0;document.getElementById('rSlider').max=r.rows.length-1;
+    if(r&&r.rows){replay=r;ridx=0;buildLineMap();document.getElementById('rSlider').max=r.rows.length-1;
       document.getElementById('rCount').textContent=`${r.rows.length}行`;renderScriptList();gotoRow(0);}
     if(m&&m.addrmap)addrmap=m.addrmap;
+    loadTxt();
     const h=await api('/api/paths').catch(()=>null);
     if(h&&h.hcb)document.getElementById('hcbPath').value=h.hcb;
   }catch(e){ document.getElementById('status').textContent='服务端未连接（用文件按钮本地加载）'; }
@@ -374,6 +463,15 @@ document.getElementById('btnExport').onclick=async ()=>{
   }
   gotoRow(cur); st.textContent+=' 完成';
 };
+document.getElementById('btnRebuild').onclick=()=>startRebuild();
+(function(){
+  const t=document.getElementById('txtEd');
+  let cur=0;
+  t.addEventListener('keyup',()=>{ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); });
+  t.addEventListener('click',()=>{ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); });
+  t.addEventListener('select',()=>{ if(!suppressTxtSync){ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); } });
+  t.addEventListener('input',()=>{ clearTimeout(txtTimer); txtTimer=setTimeout(startRebuild,2500); });
+})();
 // ---------------- 启动自测 ----------------
 (function(){
   const T=selfTest(), ok=T.filter(Boolean).length;
