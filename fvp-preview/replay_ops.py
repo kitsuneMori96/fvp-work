@@ -116,6 +116,7 @@ def main():
     tex_dir = "/tmp/vmtex"
     out = "replay.json"
     check = None
+    linemap_path = None
     args = sys.argv[2:]
     i = 0
     while i < len(args):
@@ -125,6 +126,9 @@ def main():
             out = args[i + 1]; i += 2
         elif args[i] == "--check":
             check = args[i + 1]; i += 2
+        elif args[i] == "--linemap":
+            # P1: hcb_build 产的 .linemap.json（行号->字节区间），给每行定 txt 行号。
+            linemap_path = args[i + 1]; i += 2
         else:
             i += 1
 
@@ -309,7 +313,36 @@ def main():
                             "x": p["x"], "y": p["y"], "group": True, "image": ""})
         return lst
 
-    re_line = re.compile(r"syscall: (\w+) \[(.*)\]\s*$")
+    # P1: syscall 行尾可选 `pc=ADDR`（上游 context.rs 附的 call 指令地址）。
+    # 无 pc 的老 trace 照跑（pc=None，前端映射回退）。
+    re_line = re.compile(r"syscall: (\w+) \[(.*)\](?: pc=(\d+))?\s*$")
+    re_call = re.compile(r"calltrace: from=(\d+) to=(\d+)")
+    # P1: txt行号归因。linemap: [{line,start,end}] 相对偏移 + base_off。
+    # 规则：op 的 pc 若落进行区间则直接归因；否则沿用最近的剧本区 callsite
+    # （calltrace from-5=call指令首字节）。后台线程的站外 callsite 不重置归因
+    # （v1 近似：站外 op 极少改变快照；P3 上游 trace 加 ctx id 后精确化）。
+    line_segs = []
+    if linemap_path:
+        try:
+            _lm = json.load(open(linemap_path, encoding="utf-8"))
+            _base = int(_lm.get("base_off", 0))
+            for _e in _lm.get("lines", []):
+                _a, _b = _base + int(_e["start"]), _base + int(_e["end"])
+                if _b > _a:
+                    line_segs.append((_a, _b, int(_e["line"])))
+            line_segs.sort()
+            print(f"linemap: {len(line_segs)} 行区间")
+        except Exception as e:
+            print(f"linemap 载入失败（行号映射关闭）: {e}")
+    def line_of(addr):
+        if addr is None:
+            return None
+        for _a, _b, _ln in line_segs:
+            if _a <= addr < _b:
+                return _ln
+            if _a > addr:
+                break
+        return None
     re_tick = re.compile(r"\[vm\] tickend (\d+)\s*$")
     re_save = re.compile(r"\[vm\] texsave tick=(\d+) tid=(\d+) seq=(\d+) -> (\S+)")
     re_meta = re.compile(r"logical (\d+)x(\d+) off (\d+),(\d+) uv (\d+),(\d+)")
@@ -347,12 +380,24 @@ def main():
     n_ops = 0
     n_emit = 0
     gseq = 0
+    cur_line = None  # P1: 当前 op 归属的 txt 行号
     for line in open(trace_path, encoding="utf-8", errors="replace"):
         m = re_line.search(line)
         if not m:
+            if line_segs:
+                mc = re_call.search(line)
+                if mc:
+                    _site = int(mc.group(1)) - 5
+                    _ln = line_of(_site) if _site >= 0 else None
+                    if _ln is not None:
+                        cur_line = _ln
             continue
         gseq += 1
         name = m.group(1)
+        _pc = int(m.group(3)) if m.group(3) else None  # P1: 触发本行的 op 指令地址
+        _ln = line_of(_pc)
+        if _ln is not None:
+            cur_line = _ln  # 内联 op 比 callsite 归因更精确
         if name not in TRACKED:
             continue
         vals = tuple(parse_val(t) for t in split_args(m.group(2)))
@@ -641,7 +686,7 @@ def main():
                 if pending_text:
                     _label += f" 💬{pending_text}"
                     pending_text = ""
-            rows.append({"seq": n_ops, "tick": _tick,
+            rows.append({"seq": n_ops, "tick": _tick, "pc": _pc, "line": cur_line,
                          "label": _label, "prims": snap,
                          "camera": {"x": _cv_now[0], "y": _cv_now[1], "z": _cv_now[2]}})
 

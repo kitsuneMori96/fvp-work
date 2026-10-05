@@ -1,0 +1,16 @@
+diff --git a/crates/rfvp/src/script/context.rs b/crates/rfvp/src/script/context.rs
+index 496ad77..83c8602 100644
+--- a/crates/rfvp/src/script/context.rs
++++ b/crates/rfvp/src/script/context.rs
+@@ -414,7 +419,10 @@ impl Context {
+             );
+ 
+             #[cfg(not(feature = "no_std"))]
+-            crate::trace::syscall(format_args!("syscall: {} {:?}", &syscall.name, &args));
++            // FVP-PREVIEW scratch: syscall 行尾附指令地址 pc（=本条 call 指令首字节；
++            // 此时 cursor 已走过 opcode(1)+id(2)）。给编辑器预览做“txt行->回放行”
++            // 映射用（P1）。旧解析（无 pc 后缀）仍兼容。
++            crate::trace::syscall(format_args!("syscall: {} {:?} pc={}", &syscall.name, &args, self.cursor.saturating_sub(3)));
+             let result = match sys.do_syscall(syscall.name.as_str(), args) {
+                 Ok(result) => result,
+                 Err(e) => {

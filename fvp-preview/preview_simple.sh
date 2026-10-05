@@ -62,6 +62,8 @@ echo "剧本入口: $ENTRY_PC"
 
 echo "== 3/6 vm 实录 $TICKS ticks（gbk 台词）=="
 rm -rf "$SAMPLE_DIR" && mkdir -p "$SAMPLE_DIR/tex_raw"
+# RFVP_CALL_TRACE=1: 记录 script 层 call(from->to)，给 replay 做 txt 行号归因（P1）。
+export RFVP_CALL_TRACE=1
 "$VM" "$CHB" --ticks "$TICKS" --entry-pc "$ENTRY_PC" --auto-click "$AUTO_CLICK" \
   --nls gbk --png-dir "$SAMPLE_DIR/tex_raw" \
   --trace-syscall > "$SAMPLE_DIR/scene.json" 2> "$SAMPLE_DIR/trace.log"
@@ -83,8 +85,10 @@ json.dump(fix(j), open(d, 'w', encoding='utf-8'), ensure_ascii=False)
 EOF
 
 echo "== 5/6 回放+终态自检 =="
+cp "$SIMPLE_DIR/.linemap.json" "$SAMPLE_DIR/linemap.json"
 python3 "$REPO/replay_ops.py" "$SAMPLE_DIR/trace.log" --tex-dir "$SAMPLE_DIR/tex" \
-  --out "$SAMPLE_DIR/replay.json" --check "$SAMPLE_DIR/scene.json"
+  --out "$SAMPLE_DIR/replay.json" --check "$SAMPLE_DIR/scene.json" \
+  --linemap "$SAMPLE_DIR/linemap.json"
 
 echo "== 6/6 起预览服务 =="
 bash "$REPO/start_editor.sh" "$SAMPLE_DIR" "$PORT"
