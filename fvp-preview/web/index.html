@@ -39,11 +39,11 @@
   <div class="row"><small id="rLabel">无回放</small></div>
   <div class="row"><small>过滤 <input type="text" id="rFilter" size="18" placeholder="如 258 / PrimSetXY"></small></div>
   <div id="scriptList" tabindex="0" style="max-height:260px;overflow-y:auto;border:1px solid #333;font-family:monospace;font-size:12px;"></div>
-  <div class="row"><small>点行/↑↓光标即预览到该处； slider 同步</small></div>
+  <div class="row"><small>点行/↑↓/slider 切帧（<label><input type="checkbox" id="followT"> 跟随滚动</label>；默认只高亮不抢滚动条）</small></div>
   <h3>剧本txt <span id="txtPath"></span></h3>
   <div><textarea id="txtEd" spellcheck="false" style="width:100%;height:220px;background:#1a1a1a;color:#ddd;border:1px solid #333;font-family:monospace;font-size:12px;white-space:pre;" placeholder="服务端配 --simple-dir 后在此直接写剧本"></textarea></div>
-  <div class="row"><button id="btnRebuild">保存并重跑</button><small id="txtStatus">未连接剧本</small></div>
-  <div class="row"><small>光标停哪行→画面跟到该行执行后；改完停2秒自动重跑（分钟级）</small></div>
+  <div class="row"><button id="btnRebuild">全量重跑（时间线）</button><small id="txtStatus">未连接剧本</small></div>
+  <div class="row"><small>编辑框光标停哪行→即时断点预览（秒级）；改文本自动即时；全量重跑才刷时间线</small></div>
   <div class="row"><button id="btnExport">导出PNG系列</button><small id="expStatus"></small></div>
   <h3>图层（顶→底）</h3>
   <div id="layers"></div>
@@ -246,9 +246,10 @@ function renderScriptList(){
 }
 function markScriptCursor(scroll){
   const el=document.getElementById('scriptList');
+  const follow=document.getElementById('followT')&&document.getElementById('followT').checked;
   [...el.children].forEach(c=>{ const on=parseInt(c.dataset.i,10)===ridx;
     c.style.background=on?'#2a3a55':''; c.style.color=on?'#fff':'';
-    if(on&&scroll) c.scrollIntoView({block:'nearest'}); });
+    if(on&&scroll&&follow) c.scrollIntoView({block:'nearest'}); });
 }
 // ---------------- 图层 ----------------
 function renderLayers(){
@@ -342,8 +343,11 @@ document.getElementById('rNext').onclick=()=>gotoRow(ridx+1);
 document.getElementById('rSlider').oninput=e=>gotoRow(parseInt(e.target.value,10));
 document.getElementById('btnClearHide').onclick=()=>{hidden.clear();solo=null;render();renderLayers();};
 window.addEventListener('resize',()=>{ if(scene) fitZoom(); });
-// ---------------- P2 剧本txt编辑+光标预览 ----------------
+// ---------------- P2/P3 剧本txt编辑+光标预览 ----------------
+// P3 即时预览：编辑框光标 → /api/instant（编译缓存+break-pc快照），与全量时间线独立。
+// 时间线列表默认只高亮不抢滚动（跟随复选框才滚），和编辑框滚动链彻底分离。
 let txtTimer=null, txtPoll=null, rebuilding=false, suppressTxtSync=false, lineRowMap=new Map();
+let txtLive=false, instSeq=0, instTimer=null;
 function buildLineMap(){
   lineRowMap=new Map();
   if(!replay||!replay.rows) return;
@@ -364,6 +368,7 @@ function setTxtLine(L){
   let pos=0; for(let k=0;k<L-1;k++) pos+=lines[k].length+1;
   suppressTxtSync=true;
   t.setSelectionRange(pos,pos);
+  t.scrollTop=Math.max(0,(L-4)*18); // textarea 无行高亮，手动把光标滚进视野
   suppressTxtSync=false;
 }
 function syncTxtCursor(r){
@@ -373,16 +378,39 @@ function syncTxtCursor(r){
     document.getElementById('txtStatus').textContent=`#${r.seq} ← txt行${r.line}`; }
 }
 function followTxtCursor(){
-  if(rebuilding||suppressTxtSync) return;
-  const L=curTxtLine(), i=mapLineToRow(L);
-  if(i>=0&&i!==ridx){ gotoRow(i);
-    document.getElementById('txtStatus').textContent=`txt行${L} → #${replay.rows[i].seq}`; }
+  // P3: 光标/文本变化统一走即时预览（文本+行号一起发，服务端写盘后断点跑）。
+  // 全量时间线只由「全量重跑」按钮刷新，不再自动整轮。
+  if(!txtLive||suppressTxtSync) return;
+  const L=curTxtLine();
+  clearTimeout(instTimer);
+  instTimer=setTimeout(()=>instantForLine(L),600);
+}
+async function instantForLine(L){
+  if(!txtLive) return;
+  const my=++instSeq;
+  const st=document.getElementById('txtStatus');
+  st.textContent=`即时预览 txt行${L}…`;
+  let r=null;
+  try{ r=await api('/api/instant',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:document.getElementById('txtEd').value,line:L})}); }
+  catch(e){ if(my===instSeq) st.textContent='即时预览请求失败：'+e; return; }
+  if(my!==instSeq) return; // 已被更新的光标取代
+  if(r&&r.ok&&r.snapshot){
+    adopt(r.snapshot,`即时 txt行${L}`);
+    st.textContent=`txt行${L} → pc${r.pc} · ${r.ticks}ticks/${r.ms}ms`+(r.hit?'':` · 未命中行尾（分支外？${r.why||''}）`);
+  } else {
+    if(r&&/superseded/.test(r.error||'')) return; // 静默：新请求在路上
+    const mm=/BUILD_FAIL_TXT_LINE=(\d+)/.exec((r&&r.error)||'');
+    if(mm){ setTxtLine(parseInt(mm[1],10)); st.textContent=`构建失败 @txt行${mm[1]}`; }
+    else st.textContent='即时预览失败：'+(((r&&r.error)||'').split('\n').slice(-2).join(' / ').slice(-140));
+  }
 }
 async function loadTxt(){
   try{ const r=await api('/api/script');
     if(r&&r.ok){ document.getElementById('txtEd').value=r.text;
       document.getElementById('txtPath').textContent=r.path;
-      document.getElementById('txtStatus').textContent='已载入，光标跟随中';
+      document.getElementById('txtStatus').textContent='已载入，光标跟随中（即时）';
+      txtLive=true;
     } else document.getElementById('txtStatus').textContent='无剧本（服务端配--simple-dir）';
   }catch(e){ document.getElementById('txtStatus').textContent='服务端未连接'; }
 }
@@ -470,7 +498,7 @@ document.getElementById('btnRebuild').onclick=()=>startRebuild();
   t.addEventListener('keyup',()=>{ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); });
   t.addEventListener('click',()=>{ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); });
   t.addEventListener('select',()=>{ if(!suppressTxtSync){ clearTimeout(cur); cur=setTimeout(followTxtCursor,250); } });
-  t.addEventListener('input',()=>{ clearTimeout(txtTimer); txtTimer=setTimeout(startRebuild,2500); });
+  t.addEventListener('input',()=>{ followTxtCursor(); }); // 文本变化同样走即时（防抖在内）
 })();
 // ---------------- 启动自测 ----------------
 (function(){

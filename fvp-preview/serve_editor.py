@@ -12,6 +12,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -28,6 +29,171 @@ ARGS = None
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 JOB_SEQ = [0]
+
+# P3: 即时预览状态（最新优先：新请求杀掉旧 vm 进程）
+INSTANT = {"lock": threading.Lock(), "proc": None, "text_hash": None,
+           "entry": None, "linemap": None, "line_tick": {}}
+# P3: 构建锁（即时 build_simple 与全量 preview_simple.sh 都写 .test.chb）
+BUILD_LOCK = threading.Lock()
+
+
+def _sha1_file(path):
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+
+def build_simple(simple_dir, script_txt):
+    """P3: hcb_build 编译 + 反推剧本入口 + 读 linemap。返回 (entry, linemap)。
+    文本未变且产物齐则跳过编译（秒级跟手的关键）。"""
+    import hashlib
+    with open(script_txt, "rb") as f:
+        digest = hashlib.sha1(f.read()).hexdigest()
+    chb = os.path.join(simple_dir, ".test.chb")
+    lmp = os.path.join(simple_dir, ".linemap.json")
+    if (INSTANT["text_hash"] == digest and INSTANT["linemap"]
+            and os.path.isfile(chb) and os.path.isfile(lmp)):
+        return INSTANT["entry"], INSTANT["linemap"]
+    os.makedirs(os.path.join(simple_dir, "base"), exist_ok=True)
+    for name in ("base.chb", "cg_loaded.txt"):
+        dst = os.path.join(simple_dir, "base", name)
+        if not os.path.isfile(dst):
+            shutil.copy(os.path.join(simple_dir, name), dst)
+    import shutil as _sh
+    with BUILD_LOCK:
+        _sh.copy(script_txt, os.path.join(simple_dir, "base", "Script.txt"))
+        blog = os.path.join(simple_dir, "base", "build.log")
+        p = subprocess.run(["python3", "hcb_build.py"], cwd=simple_dir,
+                           stdout=open(blog, "w"), stderr=subprocess.STDOUT, timeout=120)
+    if p.returncode != 0 or not os.path.isfile(chb):
+        line = None
+        try:
+            nums = re.findall(r"^(\d+)\s*$",
+                              open(blog, encoding="utf-8", errors="replace").read(), re.M)
+            if nums:
+                line = int(nums[-1]) + 1
+        except Exception:
+            pass
+        tail = open(blog, encoding="utf-8", errors="replace").read().splitlines()[-6:]
+        raise RuntimeError(("BUILD_FAIL_TXT_LINE=%d\n" % line if line else "")
+                           + "\n".join(tail))
+    lm = json.load(open(lmp, encoding="utf-8"))
+    entry = _derive_entry(os.path.join(simple_dir, "base", "base.chb"), chb)
+    INSTANT["text_hash"] = digest
+    INSTANT["entry"] = entry
+    INSTANT["linemap"] = lm
+    # 全量回放的行→tick 提示（有则断点 ticks 更准）
+    INSTANT["line_tick"] = {}
+    try:
+        rj = json.load(open(os.path.join(ARGS.sample_dir, "replay.json"), encoding="utf-8"))
+        for r in rj.get("rows", []):
+            if r.get("line") is not None:
+                INSTANT["line_tick"][r["line"]] = max(
+                    INSTANT["line_tick"].get(r["line"], 0), r.get("tick", 0))
+    except Exception:
+        pass
+    return entry, lm
+
+
+def _derive_entry(base_chb, built_chb):
+    """preview_simple.sh 步骤2 的 python 版：diff 反推 new_off。"""
+    import struct
+    a = open(base_chb, "rb").read()
+    b = open(built_chb, "rb").read()
+    base_off = 0x0008AEC7
+    entry = struct.unpack_from("<I", b, 0)[0]
+    cands = set()
+    i, n = 4, min(len(a), base_off)
+    while i < n:
+        if a[i] != b[i]:
+            j = i
+            while j < n and a[j] != b[j]:
+                j += 1
+            for k in range(max(4, i - 3), j):
+                v = struct.unpack_from("<I", b, k)[0]
+                if base_off < v < entry:
+                    cands.add(v)
+            i = j
+        else:
+            i += 1
+    if not cands:
+        raise RuntimeError("推不出 new_off")
+    return max(cands)
+
+
+def line_target(lm, L):
+    """P3: 光标行 → 断点 pc（该行字节尾；空行取之前最近有效行的尾）。"""
+    base = int(lm.get("base_off", 0))
+    best = None
+    for e in lm.get("lines", []):
+        if e["line"] <= L and base + int(e["end"]) > base + int(e["start"]):
+            best = base + int(e["end"])
+    if best is None:
+        best = int(lm.get("new_off", base))
+    return best
+
+
+def run_instant(simple_dir, script_txt, L):
+    """P3: 编译（如需）+ vm break-pc 跑到行尾 → 快照。返回 dict。"""
+    import re as _re, time as _t
+    t0 = _t.time()
+    # FVP_VM_BIN: release 二进制更快（debug 约 40t/s，分钟级跑满长剧本才需要）。
+    vm = os.environ.get("FVP_VM_BIN",
+                        os.path.expanduser("~/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"))
+    entry, lm = build_simple(simple_dir, script_txt)
+    target = line_target(lm, L)
+    hint = INSTANT["line_tick"].get(L)
+    cap = (hint + 150) if hint else 2000
+    idir = ARGS.sample_dir.rstrip("/") + ".instant"
+    os.makedirs(os.path.join(idir, "tex"), exist_ok=True)
+    # 拷一份 chb 再跑：全量重建会重写 .test.chb，直接读会撕裂。
+    chb_run = os.path.join(idir, "instant.chb")
+    with BUILD_LOCK:
+        import shutil as _sh2
+        _sh2.copy(os.path.join(simple_dir, ".test.chb"), chb_run)
+    fbh = os.environ.get("FVP_BASE_PATH", "")
+    if not fbh or not os.path.isdir(fbh):
+        return {"ok": False, "error": "服务端缺 FVP_BASE_PATH（正式版 moyu 目录）"}
+    cmd = [vm, chb_run,
+           "--ticks", str(cap), "--entry-pc", str(entry),
+           "--auto-click", "30", "--nls", "gbk",
+           "--png-dir", os.path.join(idir, "tex"),
+           "--break-pc", str(target)]
+    env = dict(os.environ)
+    with INSTANT["lock"]:
+        old = INSTANT["proc"]
+        if old and old.poll() is None:
+            try:
+                old.kill()
+            except Exception:
+                pass
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=env)
+        INSTANT["proc"] = p
+    try:
+        out, err = p.communicate(timeout=240)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        return {"ok": False, "error": f"即时预览超时（{cap} ticks 未跑完，行可能在分支外）"}
+    with INSTANT["lock"]:
+        if INSTANT["proc"] is p:
+            INSTANT["proc"] = None
+    if p.returncode is not None and p.returncode < 0:
+        # 被更新的请求 kill（或 vm 崩溃）；前端静默丢弃，等新请求的回包。
+        return {"ok": False, "error": f"superseded(rc={p.returncode})"}
+    ticks_used = len(_re.findall(r"tickend \d+", err or ""))
+    m = _re.search(r"\[vm\] 停止：(.*)", err or "")
+    why = m.group(1).strip() if m else ""
+    hit = ("break-pc" in why) or ("越过" in why)
+    try:
+        snap = json.loads(out)
+    except Exception as e:
+        return {"ok": False, "error": f"快照解析失败: {e}\n{(err or '')[-800:]}"}
+    ms = int((_t.time() - t0) * 1000)
+    return {"ok": True, "snapshot": snap, "line": L, "pc": target,
+            "ticks": ticks_used, "ms": ms, "hit": hit, "why": why}
 
 
 def jsend(h, obj, code=200):
@@ -62,12 +228,13 @@ def run_rebuild(job, simple_dir, script_txt, sample_dir, ticks, port):
         cmd = ["bash", os.path.join(REPO, "preview_simple.sh"),
                simple_dir, script_txt, nxt, str(port)]
         log("$ " + " ".join(cmd))
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, bufsize=1, env=env, cwd=simple_dir)
-        for line in p.stdout:
-            with JOBS_LOCK:
-                JOBS[job]["log"] += line
-        rc = p.wait()
+        with BUILD_LOCK:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, bufsize=1, env=env, cwd=simple_dir)
+            for line in p.stdout:
+                with JOBS_LOCK:
+                    JOBS[job]["log"] += line
+            rc = p.wait()
         if rc != 0:
             tail = JOBS[job]["log"][-2000:]
             with JOBS_LOCK:
@@ -161,7 +328,9 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/tex":
             p = (q.get("path") or [""])[0]
             if not p or not os.path.isfile(p):
-                return self.send_error(404, "贴图不存在")
+                # 不用 send_error(中文)：BaseHTTPRequestHandler 按 latin-1 编码
+                # message，中文直接炸 handler 线程。
+                return jsend(self, {"ok": False, "error": "贴图不存在"}, 404)
             ext = os.path.splitext(p)[1].lower()
             ctype = {"png": "image/png", "jpg": "image/jpeg", "bmp": "image/bmp"}.get(
                 ext.lstrip("."), "application/octet-stream")
@@ -170,6 +339,35 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/instant":
+            # P3: 即时预览 {text, line} → 编译(如需)+break-pc 快照。同步等（秒级）。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
+            text, L = req.get("text"), req.get("line")
+            if text is None or L is None:
+                return jsend(self, {"ok": False, "error": "缺 text/line"})
+            sp = script_path()
+            sd = ARGS.simple_dir
+            if not sp or not sd or not os.path.isdir(sd):
+                return jsend(self, {"ok": False, "error": "服务端未配 --simple-dir/--script"})
+            try:
+                L = int(L)
+            except Exception:
+                return jsend(self, {"ok": False, "error": "line 非整数"})
+            try:
+                with open(sp, "wb") as f:
+                    f.write(text.encode("gbk"))
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"写剧本失败: {e}"})
+            try:
+                return jsend(self, run_instant(sd, sp, L))
+            except RuntimeError as e:
+                return jsend(self, {"ok": False, "error": str(e)})
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"即时预览异常: {e}"})
         if u.path == "/api/rebuild":
             # P2: 存剧本 → 后台重跑管线。{text, ticks?} → {ok, job}。
             try:

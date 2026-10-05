@@ -180,6 +180,8 @@ fn main() {
         .set_dimensions(viewport.0 as u32, viewport.1 as u32);
     let mut tm = ThreadManager::new();
     tm.start_main(entry);
+    // P3/0006: 指令级断点下发（tick 结束采样对 call 型剧本永远抓不住）。
+    tm.set_break_pc(break_pc);
     let mut vm = VmRunner::new(tm);
     // 自动点击：光标先放屏幕中央，每 EVERY tick 打一对 down/up。
     if auto_click.is_some() {
@@ -282,6 +284,13 @@ fn main() {
         }
         // tick 边界标记（与 trace syscall 行同走 stderr，保序）：replay 由此建 op->tick 映射。
         eprintln!("[vm] tickend {}", tick_idx);
+        // P3/0006: 指令级断点命中检查（精确，tick 级检查仅作后备）。
+        if break_pc.is_some() {
+            if let Some(tid) = vm.thread_manager_mut().take_break_hit() {
+                stop_why = format!("命中 break-pc {}（ctx#{}，指令级）", break_pc.unwrap(), tid);
+                break;
+            }
+        }
         let t = vm.thread_manager();
         if let Some(pc) = break_pc {
             // 注意：一个 tick 跑多条指令，只能按“首次越过”判停，不能按精确相等

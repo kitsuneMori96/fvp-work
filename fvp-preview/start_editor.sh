@@ -1,6 +1,8 @@
 #!/bin/bash
 # 编辑器一键启动（WSL2 内运行，Windows 浏览器访问）。
 # 用法：bash start_editor.sh [SAMPLE_DIR] [PORT]
+# 剧本编辑模式：SIMPLE_DIR=/path/to/Simple-hcb-Editor SCRIPT=/path/to/剧本.txt
+#   bash start_editor.sh [SAMPLE_DIR] [PORT]（自动透传 --simple-dir/--script）
 # 输出两个地址：WSL IP（Windows 侧用这个）+ localhost（备用）。
 SAMPLE_DIR="${1:-/tmp/fvp-sample}"
 PORT="${2:-8000}"
@@ -15,7 +17,8 @@ if pgrep -f "serve_editor.py.*$PORT" >/dev/null 2>&1; then
   echo "服务已在跑（端口 $PORT），不重复启动。"
 else
   setsid nohup python3 "$REPO/serve_editor.py" --sample-dir "$SAMPLE_DIR" \
-    --port "$PORT" ${FVP_HCB:+--hcb "$FVP_HCB" --addrmap "$FVP_ADDRMAP" --out-hcb "$FVP_OUT"} > /tmp/editor-$PORT.log 2>&1 < /dev/null &
+    --port "$PORT" ${FVP_HCB:+--hcb "$FVP_HCB" --addrmap "$FVP_ADDRMAP" --out-hcb "$FVP_OUT"} \
+    ${SIMPLE_DIR:+--simple-dir "$SIMPLE_DIR"} ${SCRIPT:+--script "$SCRIPT"} > /tmp/editor-$PORT.log 2>&1 < /dev/null &
   sleep 2
 fi
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')

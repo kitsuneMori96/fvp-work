@@ -1,0 +1,77 @@
+diff --git a/crates/rfvp/src/subsystem/resources/thread_manager.rs b/crates/rfvp/src/subsystem/resources/thread_manager.rs
+index 800a690..a9d6f00 100644
+--- a/crates/rfvp/src/subsystem/resources/thread_manager.rs
++++ b/crates/rfvp/src/subsystem/resources/thread_manager.rs
+@@ -19,6 +19,11 @@ pub struct ThreadManager {
+     pub contexts: Vec<Context>,
+     current_id: u32,
+     thread_break: bool,
++    // FVP-PREVIEW scratch 0006: 指令级断点（目标 pc + 命中 tid）。
++    // 背景：剧本字节基本全是 call，tick 结束采样 pc 永远落在被调函数里，
++    // tick 级判停对这类脚本永远抓不住——即时预览必须逐指令判。
++    break_pc: Option<usize>,
++    break_hit: Option<u32>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -46,6 +51,8 @@ impl ThreadManager {
+             contexts,
+             current_id: 0,
+             thread_break: false,
++            break_pc: None,
++            break_hit: None,
+         }
+     }
+ 
+@@ -101,6 +108,30 @@ impl ThreadManager {
+         self.contexts[id as usize].should_exit_now()
+     }
+ 
++    // FVP-PREVIEW scratch 0006: 指令级断点读写。
++    pub fn set_break_pc(&mut self, pc: Option<usize>) {
++        self.break_pc = pc;
++        self.break_hit = None;
++    }
++
++    pub fn get_break_pc(&self) -> Option<usize> {
++        self.break_pc
++    }
++
++    pub fn get_context_pc(&self, id: u32) -> usize {
++        self.contexts[id as usize].get_pc()
++    }
++
++    pub fn record_break_hit(&mut self, id: u32) {
++        if self.break_hit.is_none() {
++            self.break_hit = Some(id);
++        }
++    }
++
++    pub fn take_break_hit(&mut self) -> Option<u32> {
++        self.break_hit.take()
++    }
++
+     pub fn context_dispatch_opcode(
+         &mut self,
+         id: u32,
+diff --git a/crates/rfvp/src/vm_runner.rs b/crates/rfvp/src/vm_runner.rs
+index 12007f2..dd56129 100644
+--- a/crates/rfvp/src/vm_runner.rs
++++ b/crates/rfvp/src/vm_runner.rs
+@@ -353,6 +353,16 @@ impl VmRunner {
+                 anyhow::bail!(e);
+             }
+ 
++            // FVP-PREVIEW scratch 0006: 指令级断点。剧本基本全是 call，
++            // tick 结束采样 pc 永远落在被调函数里——逐条 dispatch 后判，
++            // 命中即停当前 context（should_break），host 在 tick 后收 take_break_hit。
++            if let Some(bp) = self.tm.get_break_pc() {
++                if self.tm.get_context_pc(tid) >= bp {
++                    self.tm.set_context_should_break(tid, true);
++                    self.tm.record_break_hit(tid);
++                }
++            }
++
+             let mut must_yield = false;
+ 
+             // Drain all pending requests emitted by syscalls.
