@@ -82,8 +82,12 @@ def load_config(args):
         v = saved.get(key, "")
         return v if v else default
 
+    # 内置示例工程（随包 sample/）：双击即用；没有才回退 /tmp。
+    builtin_sample = os.path.join(HERE, "sample")
+    if not os.path.isdir(builtin_sample):
+        builtin_sample = "/tmp/fvp-sample"
     CONFIG.update({
-        "sample_dir": pick("sample_dir", args.sample_dir, "/tmp/fvp-sample"),
+        "sample_dir": pick("sample_dir", args.sample_dir, builtin_sample),
         "simple_dir": pick("simple_dir", args.simple_dir),
         "script": pick("script", args.script),
         "hcb": pick("hcb", args.hcb),

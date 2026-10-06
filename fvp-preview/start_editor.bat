@@ -4,16 +4,20 @@ REM Usage: start_editor.bat [SAMPLE_DIR] [PORT]
 REM Env: FVP_BASE_PATH (required, game dir, e.g. D:\soft\Sakura moyu)
 REM   SIMPLE_DIR / SCRIPT (script chain), FVP_HCB / FVP_ADDRMAP / FVP_OUT (writeback)
 setlocal EnableExtensions EnableDelayedExpansion
+set "REPO=%~dp0"
+REM Built-in sample project ships with the package: double-click just works.
+REM Pass your own dir to use your project: start_editor.bat "D:\path\to\sample" [PORT]
 set "SAMPLE_DIR=%~1"
-if "%SAMPLE_DIR%"=="" set "SAMPLE_DIR=%TEMP%\fvp-sample"
+if "%SAMPLE_DIR%"=="" set "SAMPLE_DIR=%REPO%sample"
 set "PORT=%~2"
 if "%PORT%"=="" set "PORT=8003"
-set "REPO=%~dp0"
 if not exist "%SAMPLE_DIR%\scene.json" (
-  echo Sample project not found: %SAMPLE_DIR%
-  echo Put scene.json/replay.json/addrmap.json there first, then retry.
-  echo (Or pass the dir as arg: start_editor.bat "D:\path\to\sample" [PORT])
-  goto :fail
+  echo Sample project not found. Creating an empty one at:
+  echo   %SAMPLE_DIR%
+  mkdir "%SAMPLE_DIR%" 2>nul
+  > "%SAMPLE_DIR%\scene.json" echo {"viewport":{"w":1280,"h":720},"camera":{"x":0,"y":0,"z":0},"prims":[]}
+  > "%SAMPLE_DIR%\replay.json" echo {"viewport":{"w":1280,"h":720},"camera":{"x":0,"y":0,"z":0},"rows":[]}
+  echo Empty canvas ready. Fill in script/game paths in the web config panel.
 )
 if "%FVP_VM_BIN%"=="" (
   if exist "%REPO%bin\fvp-preview-vm.exe" set "FVP_VM_BIN=%REPO%bin\fvp-preview-vm.exe"

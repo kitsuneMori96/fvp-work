@@ -4,9 +4,10 @@
 # 剧本编辑模式：SIMPLE_DIR=/path/to/Simple-hcb-Editor SCRIPT=/path/to/剧本.txt
 #   bash start_editor.sh [SAMPLE_DIR] [PORT]（自动透传 --simple-dir/--script）
 # 输出两个地址：WSL IP（Windows 侧用这个）+ localhost（备用）。
-SAMPLE_DIR="${1:-/tmp/fvp-sample}"
-PORT="${2:-8000}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
+# 示例工程随包 sample/：双击/无参即用；自己的工程传参或网页配置区切换。
+SAMPLE_DIR="${1:-$REPO/sample}"
+PORT="${2:-8000}"
 if [ ! -f "$SAMPLE_DIR/scene.json" ]; then
   echo "示例工程不存在，先物化："
   echo "  export FVP_BASE_PATH=/path/to/game"
