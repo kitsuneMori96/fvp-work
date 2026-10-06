@@ -266,7 +266,7 @@ def run_instant(simple_dir, script_txt, L):
         _sh2.copy(os.path.join(simple_dir, ".test.chb"), chb_run)
     fbh = C("fvp_base") or os.environ.get("FVP_BASE_PATH", "")
     if not fbh or not os.path.isdir(fbh):
-        return {"ok": False, "error": "服务端缺 FVP_BASE_PATH（正式版 moyu 目录）"}
+        return {"ok": False, "error": "服务端缺游戏资源目录（网页配置区填 游戏资源，或设 FVP_BASE_PATH 后重启）"}
     cmd = [vm, chb_run,
            "--ticks", str(cap), "--entry-pc", str(entry),
            "--auto-click", "30", "--nls", "gbk",

@@ -23,9 +23,8 @@ if "%FVP_VM_BIN%"=="" (
   if exist "%REPO%bin\fvp-preview-vm.exe" set "FVP_VM_BIN=%REPO%bin\fvp-preview-vm.exe"
 )
 if "%FVP_BASE_PATH%"=="" (
-  echo FVP_BASE_PATH is not set. Example:
-  echo   set FVP_BASE_PATH=D:\soft\Sakura moyu
-  goto :fail
+  echo NOTE: FVP_BASE_PATH is not set. The server will start anyway;
+  echo   fill in ^<game resources^> in the web config panel after it opens.
 )
 if "%FVP_VFS_SKIP%"=="" set "FVP_VFS_SKIP=voice,bgm,se,se_sys,se_env"
 where py >nul 2>nul
