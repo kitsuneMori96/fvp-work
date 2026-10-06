@@ -29,11 +29,13 @@
 <div id="wrap">
 <div id="left"><canvas id="cv" width="1280" height="720"></canvas></div>
 <div id="right">
-  <h3>场景</h3>
-  <div class="row"><button id="btnSample">载入示例工程</button><button id="btnFiles">文件…</button></div>
+  <h3>场景 <small id="srcInfo"></small></h3>
+  <div class="row"><button id="btnSample">载入示例工程</button><button id="btnRefresh">刷新</button></div>
+  <div class="row"><small>本地文件上传到服务端（服务端目录见上，固定目录直接放文件后按刷新）：</small></div>
   <div class="row"><small>scene <input type="file" id="fScene" accept=".json"></small></div>
   <div class="row"><small>replay <input type="file" id="fReplay" accept=".json"></small></div>
   <div class="row"><small>addrmap <input type="file" id="fMap" accept=".json"></small></div>
+  <div class="row"><small id="upStatus"></small></div>
   <h3>脚本序列 <span id="rCount"></span></h3>
   <div class="row"><button id="rPrev">◀</button><input type="range" id="rSlider" min="0" max="0" value="0" style="flex:1"><button id="rNext">▶</button></div>
   <div class="row"><small id="rLabel">无回放</small></div>
@@ -54,7 +56,7 @@
   <div id="pending"></div>
   <div class="row"><button id="btnWrite">写回 HCB</button></div>
   <div class="row"><small id="writeStatus"></small></div>
-  <div class="row"><small>hcb <input type="text" id="hcbPath" size="28" placeholder="由服务端配置"></small></div>
+  <div class="row"><small id="wbPaths">路径由服务端配置（启动参数 --hcb/--addrmap/--out-hcb）</small></div>
 </div>
 </div>
 <script>
@@ -319,13 +321,55 @@ window.addEventListener('mousemove',e=>{ if(!dragging||selected===null||!scene) 
   if(dx||dy){ const p=scene.prims.find(q=>q.id===selected);
     if(p&&(p.x!==undefined)){ p.x+=dx; p.y+=dy; lastXY=[x,y]; render(); renderLayers(); renderEditor(); } } });
 window.addEventListener('mouseup',()=>dragging=false);
-// ---------------- 文件 ----------------
-function readJSON(file){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>{try{res(JSON.parse(r.result))}catch(e){res(null)}}; r.readAsText(file); }); }
-document.getElementById('fScene').onchange=async e=>{ const s=await readJSON(e.target.files[0]); if(s&&s.prims)adopt(s,'已加载'); };
-document.getElementById('fReplay').onchange=async e=>{ const r=await readJSON(e.target.files[0]);
-  if(r&&r.rows){ replay=r;ridx=0;buildLineMap();
-    document.getElementById('rSlider').max=r.rows.length-1;
-    document.getElementById('rCount').textContent=`${r.rows.length}行`; renderScriptList(); gotoRow(0); } };
+// ---------------- 文件（上传到服务端 + 来源显示） ----------------
+// 老逻辑 FileReader 本地加载跨不过 WSL/Windows 文件系统边界；
+// 现在文件选完直传服务端 sample_dir，固定目录放文件后按刷新即可。
+function readText(file){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>res(null); r.readAsText(file); }); }
+async function uploadKind(kind,text){
+  const st=document.getElementById('upStatus');
+  st.textContent=`上传 ${kind}…`;
+  try{
+    const r=await api('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:kind,text})});
+    if(!r||!r.ok){ st.textContent=`上传失败：${(r&&r.error)||''}`; return; }
+    st.textContent=`已存服务端：${r.path}`+(r.rows!=null?`（${r.rows}行）`:'');
+    await refreshSample(false);
+  }catch(e){ st.textContent='服务端未连接'; }
+}
+function bindUpload(id,kind){
+  document.getElementById(id).onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const t=await readText(f);
+    if(t==null){ document.getElementById('upStatus').textContent='读文件失败'; return; }
+    await uploadKind(kind,t);
+    e.target.value=''; // 同一文件可重复选
+  };
+}
+bindUpload('fScene','scene'); bindUpload('fReplay','replay'); bindUpload('fMap','addrmap');
+// 服务端来源显示：sample 目录 + 各文件就绪状态 + 写回路径。
+async function refreshPaths(){
+  try{
+    const h=await api('/api/paths');
+    const yn=v=>v?`<span class="ok">✓</span>`:`<span class="bad">✗</span>`;
+    document.getElementById('srcInfo').textContent=`服务端 ${h.sample_dir||''}`;
+    document.getElementById('wbPaths').innerHTML=
+      `hcb ${yn(h.hcb_ok)} <small>${h.hcb||'（未配 --hcb）'}</small><br>`+
+      `addrmap ${yn(h.addrmap)} <small>${h.addrmap||''}</small><br>`+
+      `输出 <small>${h.out_hcb||'（随 hcb）'}</small>`+
+      (h.writeback_ready?'':`<br><span class="bad">写回未就绪：启动加 --hcb 游戏包路径 [--addrmap 映射表]</span>`);
+  }catch(e){ /* 离线时保持占位 */ }
+}
+async function refreshSample(announce=true){
+  try{
+    const [s,r,m]=await Promise.all([api('/api/scene'),api('/api/replay'),api('/api/addrmap').catch(()=>null)]);
+    if(s&&s.prims)adopt(s,'刷新');
+    if(r&&r.rows){replay=r;ridx=0;buildLineMap();document.getElementById('rSlider').max=r.rows.length-1;
+      document.getElementById('rCount').textContent=`${r.rows.length}行`;renderScriptList();gotoRow(0);}
+    if(m&&m.addrmap)addrmap=m.addrmap;
+    refreshPaths();
+    if(announce)document.getElementById('upStatus').textContent='已从服务端重载';
+  }catch(e){ document.getElementById('upStatus').textContent='服务端未连接'; }
+}
 document.getElementById('rFilter').oninput=()=>renderScriptList();
 document.getElementById('scriptList').addEventListener('keydown',e=>{
   if(!replay||!replay.rows.length) return;
@@ -336,8 +380,7 @@ document.getElementById('scriptList').addEventListener('keydown',e=>{
   else if(e.key==='Home'){ gotoRow(0); e.preventDefault(); }
   else if(e.key==='End'){ gotoRow(replay.rows.length-1); e.preventDefault(); }
 });
-document.getElementById('fMap').onchange=async e=>{ const m=await readJSON(e.target.files[0]);
-  if(m&&m.addrmap)addrmap=m.addrmap; renderEditor(); };
+document.getElementById('btnRefresh').onclick=()=>refreshSample(true);
 document.getElementById('rPrev').onclick=()=>gotoRow(ridx-1);
 document.getElementById('rNext').onclick=()=>gotoRow(ridx+1);
 document.getElementById('rSlider').oninput=e=>gotoRow(parseInt(e.target.value,10));
@@ -461,19 +504,18 @@ document.getElementById('btnSample').onclick=async ()=>{
       document.getElementById('rCount').textContent=`${r.rows.length}行`;renderScriptList();gotoRow(0);}
     if(m&&m.addrmap)addrmap=m.addrmap;
     loadTxt();
-    const h=await api('/api/paths').catch(()=>null);
-    if(h&&h.hcb)document.getElementById('hcbPath').value=h.hcb;
-  }catch(e){ document.getElementById('status').textContent='服务端未连接（用文件按钮本地加载）'; }
+    refreshPaths();
+  }catch(e){ document.getElementById('status').textContent='服务端未连接'; }
 };
-document.getElementById('btnFiles').onclick=()=>document.getElementById('fScene').click();
 document.getElementById('btnWrite').onclick=async ()=>{
   const edits=pendingEdits();
   const unmapped=edits.filter(e=>!(addrmap[e.id]&&addrmap[e.id][e.field]!==undefined));
   const st=document.getElementById('writeStatus');
   if(unmapped.length){ st.innerHTML=`<span class="bad">拒绝：无常量源 ${unmapped.map(e=>e.id+'.'+e.field).join(',')}</span>`; return; }
   if(!edits.length){ st.textContent='无改动'; return; }
+  // 路径只用服务端配置（--hcb/--addrmap/--out-hcb）：浏览器填的路径服务端够不着。
   try{ const r=await api('/api/writeback',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({edits,hcb:document.getElementById('hcbPath').value||undefined})});
+      body:JSON.stringify({edits})});
     st.innerHTML=r.ok?`<span class="ok">写回成功 → ${r.out}</span>`:`<span class="bad">写回失败：${r.error}</span>`;
   }catch(e){ st.innerHTML=`<span class="bad">服务端错误：${e}</span>`; }
 };

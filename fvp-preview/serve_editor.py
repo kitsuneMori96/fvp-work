@@ -306,9 +306,24 @@ class H(BaseHTTPRequestHandler):
             ap = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
             return self._file(ap, "application/json")
         if u.path == "/api/paths":
-            return jsend(self, {"hcb": ARGS.hcb or "", "sample_dir": ARGS.sample_dir,
-                                "simple_dir": ARGS.simple_dir or "",
-                                "script": script_path()})
+            # 面板“来源显示”：所有文件归属都在服务端（浏览器填的路径服务端够不着）。
+            sp = script_path()
+            hcb = ARGS.hcb or ""
+            am = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
+            sc = os.path.join(ARGS.sample_dir, "scene.json")
+            rj = os.path.join(ARGS.sample_dir, "replay.json")
+            return jsend(self, {
+                "sample_dir": ARGS.sample_dir,
+                "scene": sc if os.path.isfile(sc) else "",
+                "replay": rj if os.path.isfile(rj) else "",
+                "addrmap": am if os.path.isfile(am) else "",
+                "hcb": hcb, "hcb_ok": bool(hcb and os.path.isfile(hcb)),
+                "out_hcb": ARGS.out_hcb or ((hcb + ".edit.hcb") if hcb else ""),
+                "simple_dir": ARGS.simple_dir or "",
+                "script": sp,
+                "writeback_ready": bool(hcb and os.path.isfile(hcb)
+                                        and os.path.isfile(am)),
+            })
         if u.path == "/api/script":
             # P2: 读剧本 txt（磁盘 GBK → JSON UTF-8）。
             sp = script_path()
@@ -354,6 +369,44 @@ class H(BaseHTTPRequestHandler):
                 ext.lstrip("."), "application/octet-stream")
             return self._file(p, ctype)
         return self.send_error(404)
+
+    def _do_upload(self):
+        # 面板文件入口：浏览器选文件 → 内容 POST 到服务端 → 落 sample_dir。
+        # （老逻辑 FileReader 本地加载跨不过 WSL/Windows 文件系统边界。）
+        # {type: scene|replay|addrmap, text: JSON字符串} → 写 sample_dir 固定名。
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception as e:
+            return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
+        kind = req.get("type")
+        names = {"scene": "scene.json", "replay": "replay.json",
+                 "addrmap": "addrmap.json"}
+        if kind not in names:
+            return jsend(self, {"ok": False, "error": "type 须为 scene|replay|addrmap"})
+        try:
+            obj = json.loads(req.get("text") or "")
+        except Exception:
+            return jsend(self, {"ok": False, "error": "不是合法 JSON"})
+        if kind == "scene" and not (isinstance(obj, dict) and obj.get("prims")):
+            return jsend(self, {"ok": False, "error": "scene 缺 prims"})
+        if kind == "replay" and not (isinstance(obj, dict) and obj.get("rows")):
+            return jsend(self, {"ok": False, "error": "replay 缺 rows"})
+        if kind == "addrmap" and not (isinstance(obj, dict) and obj.get("addrmap")):
+            return jsend(self, {"ok": False, "error": "addrmap 缺 addrmap"})
+        dst = os.path.join(ARGS.sample_dir, names[kind])
+        try:
+            os.makedirs(ARGS.sample_dir, exist_ok=True)
+            tmp = dst + ".up-tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(obj, f, ensure_ascii=False)
+            os.replace(tmp, dst)  # 原子换位，读一半的 torn JSON 不落地
+        except Exception as e:
+            return jsend(self, {"ok": False, "error": f"写盘失败: {e}"})
+        out = {"ok": True, "path": dst}
+        if kind == "replay":
+            out["rows"] = len(obj.get("rows", []))
+        return jsend(self, out)
 
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
@@ -418,6 +471,8 @@ class H(BaseHTTPRequestHandler):
                                  daemon=True)
             t.start()
             return jsend(self, {"ok": True, "job": job})
+        if u.path == "/api/upload":
+            return self._do_upload()
         if u.path != "/api/writeback":
             return self.send_error(404)
         try:
