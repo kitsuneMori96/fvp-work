@@ -6,8 +6,12 @@
       [--addrmap traced.json] [--out-hcb 新.hcb] [--port 8000]
   浏览器开 http://localhost:8000 →「载入示例工程」。
 
+路径也可在网页「工程配置」区填写（服务端本地路径）：即时生效并存
+server_config.json（不进仓），下次启动自动恢复；命令行显式参数优先。
+
 写回安全：只调 patch_hcb.py（等宽/操作码/旧值三校验），默认绝不覆盖原文件
-（必须显式 --out-hcb）。
+（必须显式 --out-hcb 或配置区另指输出）；写回后可经 /api/download?kind=hcb
+下载到浏览器本地。
 """
 import argparse
 import json
@@ -15,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -24,6 +29,87 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
 REPO = HERE
 ARGS = None
+
+# 可配路径（网页 /api/config 热切换 + server_config.json 落盘；命令行显式参数优先）。
+CONFIG_KEYS = ("sample_dir", "simple_dir", "script", "hcb", "addrmap",
+               "out_hcb", "fvp_base")
+CONFIG_FILE = os.path.join(HERE, "server_config.json")
+CONFIG = {}
+
+
+def C(key):
+    return CONFIG.get(key, "")
+
+
+def config_check(key, val):
+    """单项校验：返回 (ok, msg)。空串=未配置（sample_dir 除外，必须有效）。"""
+    if not val:
+        if key == "sample_dir":
+            return False, "sample_dir 不能为空"
+        return True, "未配置"
+    if key in ("sample_dir", "simple_dir", "fvp_base"):
+        if not os.path.isdir(val):
+            return False, f"目录不存在: {val}"
+        return True, "目录就绪"
+    if key == "out_hcb":
+        # 与 hcb 的互斥由 POST 做最终态复核（hcb 可能同包变更）。
+        parent = os.path.dirname(os.path.abspath(val))
+        if not os.path.isdir(parent):
+            return False, f"父目录不存在: {parent}"
+        return True, "可写入" if not os.path.isfile(val) else "文件已存在（将复用为输出）"
+    # script / hcb / addrmap：必须是已存在文件
+    if not os.path.isfile(val):
+        return False, f"文件不存在: {val}"
+    ext = {"script": ".txt", "hcb": ".hcb", "addrmap": ".json"}.get(key)
+    if ext and not val.lower().endswith(ext):
+        return False, f"{key} 应为 {ext} 文件"
+    return True, "文件就绪"
+
+
+def load_config(args):
+    """命令行显式 > server_config.json > 默认；fvp_base 同步进 os.environ。"""
+    try:
+        saved = json.load(open(CONFIG_FILE, encoding="utf-8"))
+        if not isinstance(saved, dict):
+            saved = {}
+    except Exception:
+        saved = {}
+
+    def pick(key, cli_val, default=""):
+        # 命令行未传（None/空）才走配置文件。
+        if cli_val:
+            return cli_val
+        v = saved.get(key, "")
+        return v if v else default
+
+    CONFIG.update({
+        "sample_dir": pick("sample_dir", args.sample_dir, "/tmp/fvp-sample"),
+        "simple_dir": pick("simple_dir", args.simple_dir),
+        "script": pick("script", args.script),
+        "hcb": pick("hcb", args.hcb),
+        "addrmap": pick("addrmap", args.addrmap),
+        "out_hcb": pick("out_hcb", args.out_hcb),
+        # 环境变量视为显式配置（start_editor.sh/bat 照常用）：env > 文件
+        "fvp_base": args.fvp_base or os.environ.get("FVP_BASE_PATH", "")
+        or saved.get("fvp_base", ""),
+    })
+    if C("fvp_base"):
+        os.environ["FVP_BASE_PATH"] = C("fvp_base")
+
+
+def save_config():
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({k: C(k) for k in CONFIG_KEYS}, f,
+                      ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def reset_instant():
+    INSTANT["text_hash"] = None
+    INSTANT["linemap"] = None
+    INSTANT["entry"] = None
 
 # P2: rebuild 后台任务表 {job: {state, log, t0}}
 JOBS = {}
@@ -63,9 +149,15 @@ def build_simple(simple_dir, script_txt):
             shutil.copy(os.path.join(simple_dir, name), dst)
     import shutil as _sh
     with BUILD_LOCK:
-        _sh.copy(script_txt, os.path.join(simple_dir, "base", "Script.txt"))
+        # script 默认就是 <simple>/base/Script.txt：同文件跳过（否则 SameFileError）。
+        # normcase 照顾 Windows 大小写不敏感。
+        dst_txt = os.path.join(simple_dir, "base", "Script.txt")
+        same = os.path.normcase(os.path.abspath(script_txt)) == \
+            os.path.normcase(os.path.abspath(dst_txt))
+        if not same:
+            _sh.copy(script_txt, dst_txt)
         blog = os.path.join(simple_dir, "base", "build.log")
-        p = subprocess.run(["python3", "hcb_build.py"], cwd=simple_dir,
+        p = subprocess.run([sys.executable, "hcb_build.py"], cwd=simple_dir,
                            stdout=open(blog, "w"), stderr=subprocess.STDOUT, timeout=120)
     if p.returncode != 0 or not os.path.isfile(chb):
         line = None
@@ -94,7 +186,7 @@ def build_simple(simple_dir, script_txt):
     # 全量回放的行→tick 提示（有则断点 ticks 更准）
     INSTANT["line_tick"] = {}
     try:
-        rj = json.load(open(os.path.join(ARGS.sample_dir, "replay.json"), encoding="utf-8"))
+        rj = json.load(open(os.path.join(C("sample_dir"), "replay.json"), encoding="utf-8"))
         for r in rj.get("rows", []):
             if r.get("line") is not None:
                 INSTANT["line_tick"][r["line"]] = max(
@@ -146,21 +238,29 @@ def run_instant(simple_dir, script_txt, L):
     """P3: 编译（如需）+ vm break-pc 跑到行尾 → 快照。返回 dict。"""
     import re as _re, time as _t
     t0 = _t.time()
-    # FVP_VM_BIN: release 二进制更快（debug 约 40t/s，分钟级跑满长剧本才需要）。
-    vm = os.environ.get("FVP_VM_BIN",
-                        os.path.expanduser("~/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"))
+    # FVP_VM_BIN: release 二进制（debug 约 40t/s，长剧本分钟级；release 秒级）。
+    # 默认顺序：环境显式 > ext4 缓存 release > 包内 bin > 缓存 debug。
+    vm = os.environ.get("FVP_VM_BIN", "")
+    if not vm:
+        cands = [
+            os.path.expanduser("~/.cache/cargo-target/fvp-preview/release/fvp-preview-vm"),
+            os.path.join(REPO, "bin", "fvp-preview-vm"),
+            os.path.expanduser("~/.cache/cargo-target/fvp-preview/debug/fvp-preview-vm"),
+        ]
+        vm = next((c for c in cands if os.path.isfile(c) and os.access(c, os.X_OK)),
+                  cands[-1])
     entry, lm = build_simple(simple_dir, script_txt)
     target = line_target(lm, L)
     hint = INSTANT["line_tick"].get(L)
     cap = (hint + 150) if hint else 2000
-    idir = ARGS.sample_dir.rstrip("/") + ".instant"
+    idir = C("sample_dir").rstrip("/") + ".instant"
     os.makedirs(os.path.join(idir, "tex"), exist_ok=True)
     # 拷一份 chb 再跑：全量重建会重写 .test.chb，直接读会撕裂。
     chb_run = os.path.join(idir, "instant.chb")
     with BUILD_LOCK:
         import shutil as _sh2
         _sh2.copy(os.path.join(simple_dir, ".test.chb"), chb_run)
-    fbh = os.environ.get("FVP_BASE_PATH", "")
+    fbh = C("fvp_base") or os.environ.get("FVP_BASE_PATH", "")
     if not fbh or not os.path.isdir(fbh):
         return {"ok": False, "error": "服务端缺 FVP_BASE_PATH（正式版 moyu 目录）"}
     cmd = [vm, chb_run,
@@ -213,10 +313,10 @@ def jsend(h, obj, code=200):
 
 
 def script_path():
-    if ARGS.script:
-        return ARGS.script
-    if ARGS.simple_dir:
-        return os.path.join(ARGS.simple_dir, "base", "Script.txt")
+    if C("script"):
+        return C("script")
+    if C("simple_dir"):
+        return os.path.join(C("simple_dir"), "base", "Script.txt")
     return ""
 
 
@@ -276,6 +376,11 @@ def run_rebuild(job, simple_dir, script_txt, sample_dir, ticks, port):
             JOBS[job]["error"] = f"任务异常: {e}"
 
 
+def resolve_out(hcb):
+    """写回输出路径（writeback 与 download 共用同一规则）。"""
+    return C("out_hcb") or (hcb + ".edit.hcb")
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -299,28 +404,44 @@ class H(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             return self._file(os.path.join(WEB, "index.html"), "text/html; charset=utf-8")
         if u.path == "/api/scene":
-            return self._file(os.path.join(ARGS.sample_dir, "scene.json"), "application/json")
+            return self._file(os.path.join(C("sample_dir"), "scene.json"), "application/json")
         if u.path == "/api/replay":
-            return self._file(os.path.join(ARGS.sample_dir, "replay.json"), "application/json")
+            return self._file(os.path.join(C("sample_dir"), "replay.json"), "application/json")
         if u.path == "/api/addrmap":
-            ap = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
+            ap = C("addrmap") or os.path.join(C("sample_dir"), "addrmap.json")
             return self._file(ap, "application/json")
         if u.path == "/api/paths":
             # 面板“来源显示”：所有文件归属都在服务端（浏览器填的路径服务端够不着）。
             sp = script_path()
-            hcb = ARGS.hcb or ""
-            am = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
-            sc = os.path.join(ARGS.sample_dir, "scene.json")
-            rj = os.path.join(ARGS.sample_dir, "replay.json")
+            hcb = C("hcb") or ""
+            am = C("addrmap") or os.path.join(C("sample_dir"), "addrmap.json")
+            sc = os.path.join(C("sample_dir"), "scene.json")
+            rj = os.path.join(C("sample_dir"), "replay.json")
             return jsend(self, {
-                "sample_dir": ARGS.sample_dir,
+                "sample_dir": C("sample_dir"),
                 "scene": sc if os.path.isfile(sc) else "",
                 "replay": rj if os.path.isfile(rj) else "",
                 "addrmap": am if os.path.isfile(am) else "",
                 "hcb": hcb, "hcb_ok": bool(hcb and os.path.isfile(hcb)),
-                "out_hcb": ARGS.out_hcb or ((hcb + ".edit.hcb") if hcb else ""),
-                "simple_dir": ARGS.simple_dir or "",
+                "out_hcb": C("out_hcb") or ((hcb + ".edit.hcb") if hcb else ""),
+                "simple_dir": C("simple_dir") or "",
                 "script": sp,
+                "writeback_ready": bool(hcb and os.path.isfile(hcb)
+                                        and os.path.isfile(am)),
+            })
+        if u.path == "/api/config":
+            # 工程配置：当前值 + 逐项存在性 + 写回就绪（前端配置区用）。
+            cfg = {k: C(k) for k in CONFIG_KEYS}
+            checks = {}
+            for k in CONFIG_KEYS:
+                ok, msg = config_check(k, cfg[k])
+                checks[k] = {"ok": ok, "msg": msg}
+            hcb = cfg["hcb"]
+            am = cfg["addrmap"] or os.path.join(cfg["sample_dir"], "addrmap.json")
+            return jsend(self, {
+                "ok": True,
+                "config": cfg,
+                "checks": checks,
                 "writeback_ready": bool(hcb and os.path.isfile(hcb)
                                         and os.path.isfile(am)),
             })
@@ -352,12 +473,12 @@ class H(BaseHTTPRequestHandler):
             # replay 里是相对 sample_dir 的路径（tex/xxx.png）；相对路径一律
             # 以 sample_dir 为根解析（以前直接 isfile，cwd 不对就全 404）。
             if p and not os.path.isabs(p):
-                p = os.path.join(ARGS.sample_dir, p)
+                p = os.path.join(C("sample_dir"), p)
             p = os.path.normpath(p)
             # 允许 sample_dir 本体 + 即时预览用的 <sample>.instant 兄弟目录
             #（instant 快照里是 --png-dir 落盘的绝对路径）。
-            roots = [os.path.normpath(ARGS.sample_dir),
-                     os.path.normpath(ARGS.sample_dir.rstrip("/") + ".instant")]
+            roots = [os.path.normpath(C("sample_dir")),
+                     os.path.normpath(C("sample_dir").rstrip("/") + ".instant")]
             if not any(p == r or p.startswith(r + os.sep) for r in roots):
                 return jsend(self, {"ok": False, "error": "非法路径"}, 404)
             if not p or not os.path.isfile(p):
@@ -368,6 +489,31 @@ class H(BaseHTTPRequestHandler):
             ctype = {"png": "image/png", "jpg": "image/jpeg", "bmp": "image/bmp"}.get(
                 ext.lstrip("."), "application/octet-stream")
             return self._file(p, ctype)
+        if u.path == "/api/download":
+            # 导出下载（白名单：只放已配置的写回输出；防任意读盘）。
+            kind = (q.get("kind") or [""])[0]
+            if kind != "hcb":
+                return jsend(self, {"ok": False, "error": "kind 仅支持 hcb"}, 404)
+            hcb = C("hcb")
+            if not hcb or not os.path.isfile(hcb):
+                return jsend(self, {"ok": False, "error": "未配置 hcb，先配好并写回一次"}, 404)
+            out = resolve_out(hcb)
+            if not os.path.isfile(out):
+                return jsend(self, {"ok": False,
+                                    "error": f"输出尚不存在，先点写回: {out}"}, 404)
+            try:
+                with open(out, "rb") as f:
+                    body = f.read()
+            except OSError:
+                return jsend(self, {"ok": False, "error": "读输出失败"}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s"' % os.path.basename(out))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         return self.send_error(404)
 
     def _do_upload(self):
@@ -380,10 +526,32 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
         kind = req.get("type")
+        if kind == "script":
+            # 剧本 txt：浏览器 UTF-8 → 服务端转 GBK 落 script_path()。
+            sp = script_path()
+            if not sp:
+                return jsend(self, {"ok": False,
+                                    "error": "服务端未配剧本路径（配置区填 script 或配 --simple-dir）"})
+            try:
+                data = (req.get("text") or "").encode("gbk")
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"转 GBK 失败: {e}"})
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(sp)), exist_ok=True)
+                tmp = sp + ".up-tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, sp)
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"写盘失败: {e}"})
+            reset_instant()
+            return jsend(self, {"ok": True, "path": sp,
+                                "lines": (req.get("text") or "").count("\n") + 1})
         names = {"scene": "scene.json", "replay": "replay.json",
                  "addrmap": "addrmap.json"}
         if kind not in names:
-            return jsend(self, {"ok": False, "error": "type 须为 scene|replay|addrmap"})
+            return jsend(self, {"ok": False,
+                                "error": "type 须为 scene|replay|addrmap|script"})
         try:
             obj = json.loads(req.get("text") or "")
         except Exception:
@@ -394,9 +562,9 @@ class H(BaseHTTPRequestHandler):
             return jsend(self, {"ok": False, "error": "replay 缺 rows"})
         if kind == "addrmap" and not (isinstance(obj, dict) and obj.get("addrmap")):
             return jsend(self, {"ok": False, "error": "addrmap 缺 addrmap"})
-        dst = os.path.join(ARGS.sample_dir, names[kind])
+        dst = os.path.join(C("sample_dir"), names[kind])
         try:
-            os.makedirs(ARGS.sample_dir, exist_ok=True)
+            os.makedirs(C("sample_dir"), exist_ok=True)
             tmp = dst + ".up-tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(obj, f, ensure_ascii=False)
@@ -421,7 +589,7 @@ class H(BaseHTTPRequestHandler):
             if text is None or L is None:
                 return jsend(self, {"ok": False, "error": "缺 text/line"})
             sp = script_path()
-            sd = ARGS.simple_dir
+            sd = C("simple_dir")
             if not sp or not sd or not os.path.isdir(sd):
                 return jsend(self, {"ok": False, "error": "服务端未配 --simple-dir/--script"})
             try:
@@ -450,7 +618,7 @@ class H(BaseHTTPRequestHandler):
             if text is None:
                 return jsend(self, {"ok": False, "error": "缺 text"})
             sp = script_path()
-            sd = ARGS.simple_dir
+            sd = C("simple_dir")
             if not sp or not sd or not os.path.isdir(sd):
                 return jsend(self, {"ok": False, "error": "服务端未配 --simple-dir/--script"})
             try:
@@ -467,10 +635,101 @@ class H(BaseHTTPRequestHandler):
                 job = f"r{JOB_SEQ[0]}"
                 JOBS[job] = {"state": "running", "log": "", "t0": time.time()}
             t = threading.Thread(target=run_rebuild,
-                                 args=(job, sd, sp, ARGS.sample_dir, ticks, ARGS.port),
+                                 args=(job, sd, sp, C("sample_dir"), ticks, ARGS.port),
                                  daemon=True)
             t.start()
             return jsend(self, {"ok": True, "job": job})
+        if u.path == "/api/config":
+            # 工程配置热切换：{values: {key: path}} 原子校验→应用→落盘。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
+            vals = req.get("values") or {}
+            unknown = [k for k in vals if k not in CONFIG_KEYS]
+            if unknown:
+                return jsend(self, {"ok": False,
+                                    "error": f"未知配置项: {','.join(unknown)}"})
+            norm = {k: (vals[k] or "").strip() for k in vals}
+            # 先全量校验（含 out_hcb↔hcb 互斥：用“新 hcb”复核）
+            errs = {}
+            for k, v in norm.items():
+                ok, msg = config_check(k, v)
+                if not ok:
+                    errs[k] = msg
+            # 最终态互斥：新 hcb 不能等于最终 out（含默认派生名）。
+            fh = norm.get("hcb", C("hcb"))
+            fo = norm.get("out_hcb", C("out_hcb")) or (
+                fh + ".edit.hcb" if fh else "")
+            if fh and fo and os.path.abspath(fh) == os.path.abspath(fo):
+                errs["out_hcb" if "out_hcb" in norm else "hcb"] = \
+                    "hcb 与输出路径相同，拒绝覆盖原文件"
+            if errs:
+                return jsend(self, {"ok": False, "errors": errs})
+            # script → simple_dir 自动反推：<simple>/base/Script.txt 且
+            # simple 未配（也没随包新配）时，省掉一次手工填。
+            derived = {}
+            if norm.get("script") and not norm.get("simple_dir", C("simple_dir")):
+                ap = os.path.abspath(norm["script"])
+                if os.path.basename(ap) == "Script.txt" and \
+                        os.path.basename(os.path.dirname(ap)) == "base":
+                    cand = os.path.dirname(os.path.dirname(ap))
+                    if os.path.isdir(cand):
+                        norm["simple_dir"] = cand
+                        derived["simple_dir"] = cand
+            changed = {k for k, v in norm.items() if v != C(k)}
+            CONFIG.update(norm)
+            if C("fvp_base"):
+                os.environ["FVP_BASE_PATH"] = C("fvp_base")
+            elif "fvp_base" in changed:
+                os.environ.pop("FVP_BASE_PATH", None)
+            if changed & {"simple_dir", "script", "sample_dir"}:
+                reset_instant()
+            save_config()
+            out = {"ok": True, "changed": sorted(changed)}
+            if derived:
+                out["derived"] = derived
+            return jsend(self, out)
+        if u.path == "/api/export-hcb":
+            # 导出 txt 的编译版 hcb（走 hcb_build 产物 .test.chb，无需原 hcb）。
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
+            sp = script_path()
+            sd = C("simple_dir")
+            if not sp or not sd or not os.path.isdir(sd):
+                return jsend(self, {"ok": False,
+                                    "error": "服务端未配剧本（配置区填剧本txt）"})
+            text = req.get("text")
+            if text is not None:
+                try:
+                    with open(sp, "wb") as f:
+                        f.write(text.encode("gbk"))
+                except Exception as e:
+                    return jsend(self, {"ok": False, "error": f"写剧本失败: {e}"})
+            try:
+                build_simple(sd, sp)
+            except RuntimeError as e:
+                return jsend(self, {"ok": False, "error": str(e)})
+            except Exception as e:
+                return jsend(self, {"ok": False, "error": f"导出失败: {e}"})
+            try:
+                with BUILD_LOCK:
+                    with open(os.path.join(sd, ".test.chb"), "rb") as f:
+                        body = f.read()
+            except OSError:
+                return jsend(self, {"ok": False, "error": "构建产物缺失"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition",
+                             'attachment; filename="export.hcb"')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if u.path == "/api/upload":
             return self._do_upload()
         if u.path != "/api/writeback":
@@ -481,18 +740,18 @@ class H(BaseHTTPRequestHandler):
         except Exception as e:
             return jsend(self, {"ok": False, "error": f"请求解析失败: {e}"})
         edits = req.get("edits") or []
-        hcb = req.get("hcb") or ARGS.hcb
+        hcb = req.get("hcb") or C("hcb")
         if not edits:
             return jsend(self, {"ok": False, "error": "无改动"})
         if not hcb or not os.path.isfile(hcb):
             return jsend(self, {"ok": False, "error": "HCB 路径无效（服务端 --hcb 或页面填写）"})
-        am = ARGS.addrmap or os.path.join(ARGS.sample_dir, "addrmap.json")
+        am = C("addrmap") or os.path.join(C("sample_dir"), "addrmap.json")
         if not os.path.isfile(am):
             return jsend(self, {"ok": False, "error": f"映射表不存在: {am}"})
-        out = ARGS.out_hcb or (hcb + ".edit.hcb")
+        out = resolve_out(hcb)
         if os.path.abspath(out) == os.path.abspath(hcb):
             return jsend(self, {"ok": False, "error": "拒绝覆盖原文件，请换 --out-hcb"})
-        cmd = ["python3", os.path.join(REPO, "patch_hcb.py"), hcb, am, out]
+        cmd = [sys.executable, os.path.join(REPO, "patch_hcb.py"), hcb, am, out]
         for e in edits:
             cmd.append(f"{e['id']}:{e['field']}={e['value']}")
         try:
@@ -509,21 +768,25 @@ class H(BaseHTTPRequestHandler):
 def main():
     global ARGS
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sample-dir", default="/tmp/fvp-sample")
-    ap.add_argument("--hcb", default="")
-    ap.add_argument("--addrmap", default="")
-    ap.add_argument("--out-hcb", default="")
+    # 路径类默认 None：未传才走 server_config.json（显式 > 文件 > 默认）。
+    ap.add_argument("--sample-dir", default=None)
+    ap.add_argument("--hcb", default=None)
+    ap.add_argument("--addrmap", default=None)
+    ap.add_argument("--out-hcb", default=None)
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--simple-dir", default="",
+    ap.add_argument("--simple-dir", default=None,
                     help="P2: Simple 仓库目录（开剧本编辑+重跑需配）")
-    ap.add_argument("--script", default="",
+    ap.add_argument("--script", default=None,
                     help="P2: 剧本 txt 路径（磁盘 GBK；默认 <simple-dir>/base/Script.txt）")
+    ap.add_argument("--fvp-base", default=None,
+                    help="游戏资源目录（默认读环境 FVP_BASE_PATH；网页配置区可改）")
     ap.add_argument("--host", default="0.0.0.0",
                     help="监听地址（WSL2 下 Windows 浏览器需 0.0.0.0，用 WSL IP 访问）")
     ARGS = ap.parse_args()
+    load_config(ARGS)
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), H)
     print(f"编辑器服务 http://localhost:{ARGS.port}/（Ctrl+C 停）", flush=True)
-    print(f"sample={ARGS.sample_dir} hcb={ARGS.hcb or '(页面填)'}", flush=True)
+    print(f"sample={C('sample_dir')} hcb={C('hcb') or '(页面填)'}", flush=True)
     srv.serve_forever()
 
 

@@ -16,9 +16,11 @@ fi
 # 预览不需要音频：跳过 voice/bgm/se 包的扫表（0007；9P 上全量扫表要 6s）。
 export FVP_VFS_SKIP="${FVP_VFS_SKIP:-voice,bgm,se,se_sys,se_env}"
 # vm 二进制：release 包自带 bin/；源码用户走 vm/target/release（FVP_VM_BIN 显式优先）。
+# 项目 .cargo/config 把 target-dir 指到 ext4 缓存（D 盘 9P 慢），release 产物在那。
 if [ -z "$FVP_VM_BIN" ]; then
   if [ -x "$REPO/bin/fvp-preview-vm" ]; then export FVP_VM_BIN="$REPO/bin/fvp-preview-vm";
-  elif [ -x "$REPO/vm/target/release/fvp-preview-vm" ]; then export FVP_VM_BIN="$REPO/vm/target/release/fvp-preview-vm"; fi
+  elif [ -x "$REPO/vm/target/release/fvp-preview-vm" ]; then export FVP_VM_BIN="$REPO/vm/target/release/fvp-preview-vm";
+  elif [ -x "$HOME/.cache/cargo-target/fvp-preview/release/fvp-preview-vm" ]; then export FVP_VM_BIN="$HOME/.cache/cargo-target/fvp-preview/release/fvp-preview-vm"; fi
 fi
 if pgrep -f "serve_editor.py.*$PORT" >/dev/null 2>&1; then
   echo "服务已在跑（端口 $PORT），不重复启动。"

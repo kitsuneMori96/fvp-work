@@ -24,7 +24,8 @@ mkdir -p base "$SAMPLE_DIR"
 BUILD_LOG="$SAMPLE_DIR/build.log"
 [ -f base/base.chb ] || cp base.chb base/base.chb
 [ -f base/cg_loaded.txt ] || cp cg_loaded.txt base/cg_loaded.txt
-cp "$SCRIPT_TXT" base/Script.txt
+# script 默认就是 base/Script.txt：同文件（-ef 比 inode）跳过，否则 cp 自杀。
+[ "$SCRIPT_TXT" -ef base/Script.txt ] 2>/dev/null || cp "$SCRIPT_TXT" base/Script.txt
 python3 hcb_build.py > "$BUILD_LOG" 2>&1 || {
   # P2: 构建报错定位到 txt 行：hcb_build 逐行 print(i)，取最后一个纯数字+1。
   echo "BUILD_FAIL_TXT_LINE=$(grep -E '^[0-9]+$' "$BUILD_LOG" | tail -1 | awk '{print $1+1}')"

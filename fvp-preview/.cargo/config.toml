@@ -1,3 +1,10 @@
+# 项目约定：下载优先中国镜像（写死在项目里，跟人不跟机）。
+[source.crates-io]
+replace-with = "tuna"
+[source.tuna]
+registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"
+# rustup 工具链/组件：项目配不了，只能走环境（见 AGENTS.md）：
+#   export RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup
 # WSL 侧构建：产物进 ext4（D 盘 9P 太慢）。
 # Windows 侧构建时用环境变量覆盖即可（env 优先级高于本文件）：
 #   $env:CARGO_TARGET_DIR = ".\target"
